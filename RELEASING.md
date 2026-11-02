@@ -1,0 +1,107 @@
+# Releasing
+
+This repository contains both the application and its Homebrew tap. The release workflow builds an Apple Silicon app, signs it with Developer ID, notarizes it, and creates a **draft GitHub release** plus a **draft cask-update PR**. A maintainer reviews and publishes the release before merging the cask PR.
+
+No production release can be created until Apple signing and notarization credentials are configured. Development/PR builds are ad-hoc signed and are not public release artifacts.
+
+## How Homebrew distribution works
+
+A cask is a small Ruby manifest describing a prebuilt app's version, download URL, SHA-256, platform requirements, and installation/uninstallation behavior. Homebrew downloads the GitHub release ZIP; it does not compile Swift on the user's Mac. The cask in `Casks/pane-switcher-for-rex.rb` is generated only from a real, finalized archive. There is no placeholder checksum or `:no_check` cask.
+
+This project starts with its own tap rather than submitting to the official `homebrew/cask` repository. New projects need not meet the official repository's age/notability admission requirements to distribute through their own tap. The app and tap can share this repository because Homebrew supports a top-level `Casks/` directory and an explicit Git URL:
+
+```sh
+brew tap Kristijan/pane-switcher-for-rex https://github.com/Kristijan/pane-switcher-for-rex
+brew install --cask Kristijan/pane-switcher-for-rex/pane-switcher-for-rex
+```
+
+Do not omit the tap URL: this repository does not use Homebrew's inferred `homebrew-*` naming convention. For future versions, the merged cask update lets users run `brew update` and `brew upgrade --cask Kristijan/pane-switcher-for-rex/pane-switcher-for-rex`. Direct-download users replace the app manually.
+
+References: [Taps](https://docs.brew.sh/Taps), [Creating and maintaining a tap](https://docs.brew.sh/How-to-Create-and-Maintain-a-Tap#casks), [Cask cookbook](https://docs.brew.sh/Cask-Cookbook), [Tap trust](https://docs.brew.sh/Tap-Trust), [official acceptance policy](https://docs.brew.sh/Package-Acceptance-Policy#notability).
+
+## One-time Apple setup
+
+1. Enroll in the [Apple Developer Program](https://developer.apple.com/programs/enroll/).
+2. Create a **Developer ID Application** certificate with its private key. In Keychain Access, export the certificate **and private key** as a password-protected `.p12`. A development certificate, Developer ID Installer certificate, or ad-hoc identity is not a substitute.
+3. Obtain a **team App Store Connect API key** for notarization, its key ID, issuer ID, and private `.p8` file. Retain the private key securely; do not commit it. Use a team key with issuer ID for this workflow rather than relying on differing individual-key support across tool versions.
+4. Record the exact signing identity name, such as `Developer ID Application: Your Name (TEAMID)`, and the matching team ID.
+
+The release script imports the certificate into a temporary keychain, verifies identity/team membership, and removes temporary credentials and that keychain on exit. It signs with hardened runtime and a secure timestamp, requires Apple's notarization status to be **Accepted**, staples the app, and only then generates the distributed ZIP. No sandbox, Apple Events, JIT, or library-validation exception entitlement is enabled.
+
+References: [Apple notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow), [notarization requirements](https://developer.apple.com/documentation/security/resolving-common-notarization-issues), [API keys](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api), [GitHub Apple signing setup](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications).
+
+## One-time GitHub setup
+
+In [repository settings](https://github.com/Kristijan/pane-switcher-for-rex/settings), configure:
+
+1. **Environments → New environment → `production-release`.** Add a required human reviewer and restrict deployment to release tags matching `v*`, not arbitrary branches. Prevent self-review where practical. Signing secrets belong only in this environment.
+2. Add these environment secrets:
+
+   | Secret | Value |
+   | --- | --- |
+   | `APPLE_CERTIFICATE_P12_BASE64` | Base64-encoded exported `.p12`, including its private key |
+   | `APPLE_CERTIFICATE_PASSWORD` | Nonempty password used when exporting the `.p12` |
+   | `DEVELOPER_ID_APPLICATION_IDENTITY` | Full Developer ID Application certificate name |
+   | `APPLE_TEAM_ID` | Matching Apple developer team ID |
+   | `NOTARY_KEY_ID` | Team App Store Connect API key ID |
+   | `NOTARY_ISSUER_ID` | Team API key issuer UUID |
+   | `NOTARY_PRIVATE_KEY` | Full `.p8` PEM contents, including BEGIN/END lines |
+
+3. **Actions → General → Workflow permissions:** keep the default token read-only, but enable **Allow GitHub Actions to create and approve pull requests**. Individual release jobs request only the writes they need. A personal access token is not required for the same-repository cask PR.
+4. Protect `main` with review and both required CI checks: **Tests and arm64 app** and **Workflow and shell syntax**. Allow maintainers to trigger/approve workflow runs for token-generated cask PRs where GitHub requests it. Review changes to `.github/workflows/` and `scripts/` as privileged release code.
+5. Restrict creation, movement, and deletion of `v*` tags to release maintainers. Do not move an already published version tag.
+
+Do not put signing secrets into PR jobs or run contributor code with them via `pull_request_target`. GitHub's release environment is the approval gate; public PR CI never needs those credentials. Actions are pinned to commit SHAs. CI/release use the official `macos-15` Apple Silicon runner and also assert the actual architecture at runtime.
+
+References: [GitHub environment protection](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments), [workflow permissions](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository), [token-generated events](https://docs.github.com/en/actions/concepts/security/github_token), [runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+
+## Prepare and release a version
+
+1. Open a version PR against `main`. Set `CFBundleShortVersionString` in `Resources/Info.plist` to the stable version, and increment `CFBundleVersion` for a new build. Initial release: **1.0.0**, build **1**. The About page reads the bundle version automatically.
+2. Run local checks and require successful PR CI:
+
+   ```sh
+   scripts/test.sh
+   python3 scripts/test-release.py
+   scripts/build-app.sh
+   scripts/smoke-app.sh
+   ```
+
+3. Merge the reviewed release commit. Create and push its matching tag, for example:
+
+   ```sh
+   git tag -a v1.0.0 -m "Pane Switcher for Rex 1.0.0"
+   git push origin v1.0.0
+   ```
+
+   Create the tag from the intended merged commit, not an unrelated local branch. The workflow rejects version/tag mismatches and non-arm64 output.
+
+4. Approve the `production-release` environment deployment. The workflow tests the code, builds and signs the app, notarizes/staples it, checks the final extracted archive, and creates these draft assets:
+
+   - `Pane-Switcher-for-Rex-1.0.0-arm64.zip`
+   - `Pane-Switcher-for-Rex-1.0.0-arm64.zip.sha256`
+   - `pane-switcher-for-rex.rb`
+
+5. Inspect the Actions result and draft release. Download the actual ZIP and verify its checksum. Test the signed app on an Apple Silicon Mac, including first launch, setup, local/remote pane activation, About, and quitting. Review/edit the release notes.
+6. **Publish the reviewed GitHub draft release.** Draft assets cannot be downloaded publicly by Homebrew.
+7. Review the generated **draft cask PR**. Approve its workflow run if GitHub requests that approval, wait for CI, then mark it ready and merge it **only after the matching release is public**. This first PR creates `Casks/pane-switcher-for-rex.rb`; subsequent releases update it.
+8. Verify a real Homebrew install/upgrade and a direct download. Installation is not available until both the release assets and cask are public.
+
+A manual retry may use an existing tag, selected as both the workflow ref and input:
+
+```sh
+gh workflow run release.yml --ref v1.0.0 -f tag=v1.0.0
+```
+
+Selecting `main` for that dispatch is intentionally rejected. The workflow never creates an arbitrary tag for you. See [GitHub release CLI](https://cli.github.com/manual/gh_release_create).
+
+## Failures and safe retries
+
+- Missing/invalid Apple credentials fail explicitly; there is no unsigned production fallback.
+- The release script produces exactly three distribution files under `dist/MAJOR.MINOR.PATCH/`; it does not publish them by itself and refuses to overwrite an existing version directory. This is separate from SwiftPM's `.build/release` symlink. CI uploads only the explicitly named ZIP, checksum, and cask.
+- Existing GitHub releases or `cask/vX.Y.Z` branches are not overwritten automatically. Inspect drafts, branches, PRs, and the failed job before retrying or performing deliberate cleanup.
+- If draft creation succeeded but cask creation failed, retain the reviewed assets and rerun only the failed portion after correcting repository permissions.
+- Never replace an already-public ZIP under the same version. A changed binary means a new version, new checksum, and reviewed cask update.
+- The ZIP contains only the app bundle, not repository files, signing keys, or local planning notes. Login registration is a `zap` action, not an ordinary uninstall action: Homebrew also runs ordinary uninstall actions during upgrades/reinstalls, which must preserve that preference. Disable Launch at login before uninstalling, or use `brew uninstall --cask --zap` to remove its registration together with app-owned settings/history.
+
+Production signing/notarization and GitHub-hosted release execution must be verified with real credentials before the first public release. A green development build alone does not prove Gatekeeper/notarization acceptance.
