@@ -184,6 +184,7 @@ private actor RexInventory {
     private var hostLookupSettled = false
     private var settled = false
     private var warnings: [String] = []
+    private var hostDiscoveryWarnings: [String] = []
 
     init(lifetime: RexBackendLifetime,
          connectionFactory: @escaping @Sendable (RexHost) -> any RexInventoryConnection,
@@ -222,6 +223,7 @@ private actor RexInventory {
             else if state.hasSnapshot { continuation.yield(.panes(host, state.cache.panes)) }
         }
         for warning in warnings { continuation.yield(.warning(warning)) }
+        if !hostDiscoveryWarnings.isEmpty { continuation.yield(.hostDiscoveryWarnings(hostDiscoveryWarnings)) }
         if settled { continuation.yield(.finished) }
     }
 
@@ -622,10 +624,10 @@ private actor RexInventory {
                 let result = try await hostLookup()
                 guard !lifetime.isStopped, !Task.isCancelled else { return }
                 reconcileHosts(result.hosts)
-                for warning in result.warnings { warn(warning) }
+                updateHostDiscoveryWarnings(result.warnings)
             } catch {
                 guard !lifetime.isStopped, !Task.isCancelled else { return }
-                warn("Could not list remote hosts: \(error.localizedDescription)")
+                updateHostDiscoveryWarnings(["Could not list remote hosts: \(error.localizedDescription)"])
             }
             hostLookupSettled = true
             finishIfSettled()
@@ -680,6 +682,12 @@ private actor RexInventory {
         warnings.append(message)
         if warnings.count > 16 { warnings.removeFirst() }
         broadcast(.warning(message))
+    }
+
+    private func updateHostDiscoveryWarnings(_ messages: [String]) {
+        guard hostDiscoveryWarnings != messages else { return }
+        hostDiscoveryWarnings = messages
+        broadcast(.hostDiscoveryWarnings(messages))
     }
 
     private func finishIfSettled() {

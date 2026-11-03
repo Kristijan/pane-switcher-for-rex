@@ -43,6 +43,7 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
     private var selection = PaneSelection()
     private var errorMessage: String?
     private var warningMessage: String?
+    private var hostDiscoveryWarnings: [String] = []
     private var recentIDs: [String] = []
     private var recentWarningMessage: String?
     private var diagnostics = PickerDiagnostics()
@@ -196,6 +197,7 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
             rebuildResults(resetViewport: true)
         }
         warningMessage = nil
+        hostDiscoveryWarnings.removeAll()
         updateFooter()
         discoveryTask = Task { [weak self, backend] in
             for await event in backend.discover() {
@@ -248,6 +250,8 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
             rebuildResults()
         case .warning(let warning):
             warningMessage = warning
+        case .hostDiscoveryWarnings(let warnings):
+            hostDiscoveryWarnings = warnings
         case .finished:
             isDiscovering = false
         }
@@ -386,6 +390,7 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
 
     private func updateFooter() {
         let emptyText: String
+        var messageDetails: String?
         let hasInventory = inventories.values.contains { !$0.isEmpty }
         let query = PaneSearch.Query(search.stringValue)
         let hasPendingHosts = hosts.values.contains { hostStates[$0.id] == .connecting && query.matches($0) }
@@ -405,6 +410,10 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         } else if let recentWarningMessage {
             message.stringValue = recentWarningMessage
             message.textColor = .secondaryLabelColor
+        } else if !hostDiscoveryWarnings.isEmpty {
+            message.stringValue = "Check Rex connections for remote host issues."
+            messageDetails = hostDiscoveryWarnings.joined(separator: "\n")
+            message.textColor = .secondaryLabelColor
         } else if let warningMessage {
             message.stringValue = warningMessage
             message.textColor = .secondaryLabelColor
@@ -418,7 +427,7 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         if list.panes.isEmpty, !list.rows.isEmpty {
             message.stringValue = emptyText + (message.stringValue.isEmpty ? "" : " · \(message.stringValue)")
         }
-        message.toolTip = message.stringValue
+        message.toolTip = messageDetails ?? message.stringValue
         surface.updateFooterLayout(hasMessage: !message.stringValue.isEmpty)
         if debug {
             let ordered = hosts.values.sorted { ($0.label, $0.id) < ($1.label, $1.id) }
@@ -431,7 +440,7 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
                 }
                 return "\(host.label): \(state)"
             }
-            status.string = (diagnostics.lines + hostLines).joined(separator: "\n")
+            status.string = (diagnostics.lines + hostLines + hostDiscoveryWarnings).joined(separator: "\n")
             status.toolTip = status.string
             status.sizeToFit()
         }

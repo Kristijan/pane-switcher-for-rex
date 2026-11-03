@@ -25,6 +25,10 @@ To exercise the UI, quit any installed copy first, then open the development bun
 
 The suite does not require a running Rex instance. Live picker tests do require Rex and its local server. macOS privacy permissions used by external test automation are not application requirements.
 
+For startup checks, distinguish no running Rex application from several running copies with none focused. The former should instruct the user to open Rex; the latter should request that they focus the intended copy. Test the no-Rex case in an isolated session rather than terminating a developer's active Rex session.
+
+Remote host-discovery warnings describe the latest lookup, not historical failures. A successful lookup replaces or clears only those warnings, including in an already-open picker and when reopening it; metadata, refresh, and other host warnings remain independent. The footer shows concise guidance, with full lookup details available in its tooltip and debug diagnostics.
+
 The AppKit interaction tests dispatch real local mouse events through the picker, including its host-suggestion child window and nested children. For live UI checks, type `host:`, click a suggestion, and confirm that it inserts a host pill without dismissing the picker; clicks in an unrelated window must still dismiss it.
 
 When exercising picker cancellation, interrupt an in-flight opening lookup with Settings or Setup, then request the picker again before the old lookup finishes. The cancelled invocation must neither present a picker nor clear the replacement lookup's ownership; repeated shortcut presses must not start concurrent replacement lookups.

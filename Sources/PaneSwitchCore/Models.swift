@@ -65,6 +65,8 @@ public enum DiscoveryEvent: Sendable {
     case panes(RexHost, [Pane])
     case failed(RexHost, String)
     case warning(String)
+    /// Replaces warnings from the latest remote host lookup; an empty list resolves them.
+    case hostDiscoveryWarnings([String])
     case finished
 }
 
