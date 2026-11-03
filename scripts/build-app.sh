@@ -7,8 +7,8 @@ if [[ "$(uname -m)" != arm64 ]]; then
   exit 1
 fi
 python3 "$ROOT/scripts/release-support.py" validate --plist "$ROOT/Resources/Info.plist" >&2
-swift build --build-system native -c release --arch arm64 >&2
-BIN="$(swift build --build-system native -c release --arch arm64 --show-bin-path)"
+swift build -c release --arch arm64 >&2
+BIN="$(swift build -c release --arch arm64 --show-bin-path)"
 APP="$ROOT/.build/Pane Switcher for Rex.app"
 # Recreate only this generated bundle so stale resources cannot enter a release.
 rm -rf "$APP"
