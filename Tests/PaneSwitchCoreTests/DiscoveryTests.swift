@@ -103,6 +103,70 @@ struct DiscoveryTests {
         #expect(remote.shutdownCount > 0)
     }
 
+    @Test func hostLookupRecoveryResolvesLiveAndReplayedWarningsWithoutClearingMetadataWarnings() async throws {
+        let local = FixtureConnection(views: [view("session:local", blocks: ["block:local"])], metadataFails: true)
+        let remote = FixtureConnection(views: [view("session:remote", blocks: ["block:remote"])])
+        let configured = RexHost(id: "remote", label: "Remote", server: "Remote")
+        let factory = FixtureFactory(local: local, remotes: [remote])
+        let lookup = FixtureHosts([])
+        lookup.fail("Server is offline")
+        let backend = RexBackend(connectionFactory: { factory.connection($0) }, hostLookup: { try lookup.read() })
+        defer { backend.shutdown() }
+        let recorder = EventRecorder()
+        let observer = Task { for await event in backend.discover() { await recorder.record(event) } }
+        defer { observer.cancel() }
+        try await waitUntil { await recorder.snapshot().finished }
+        let failed = await recorder.snapshot()
+        #expect(failed.warnings.contains { $0.contains("Server is offline") })
+        #expect(failed.warnings.contains { $0.contains("metadata") })
+        #expect(await settledSnapshot(backend).warnings.contains { $0.contains("Server is offline") })
+
+        // An unrelated successful pane refresh must not resolve host lookup failure.
+        local.setViews([view("session:local", label: "Updated", blocks: ["block:local"])])
+        local.emit("session_view_changed", session: "session:local")
+        try await waitUntil { await recorder.snapshot().panes["local"]?.first?.sessionLabel == "Updated" }
+        #expect(await recorder.snapshot().warnings.contains { $0.contains("Server is offline") })
+
+        lookup.set([configured])
+        local.emit("hosts_changed")
+        try await waitUntil { await recorder.snapshot().panes["remote"]?.count == 1 }
+        let recovered = await recorder.snapshot()
+        #expect(!recovered.warnings.contains { $0.contains("Server is offline") })
+        #expect(recovered.warnings.contains { $0.contains("metadata") })
+        #expect(recovered.panes["local"]?.count == 1)
+
+        observer.cancel()
+        await observer.value
+        let reopened = await settledSnapshot(backend)
+        #expect(!reopened.warnings.contains { $0.contains("Server is offline") })
+        #expect(reopened.warnings.contains { $0.contains("metadata") })
+        #expect(reopened.panes["remote"]?.count == 1)
+    }
+
+    @Test func hostLookupResultWarningsAreReplacedAndResolvedByLaterResults() async throws {
+        let local = FixtureConnection(views: [])
+        let lookup = FixtureHosts([], warnings: ["First remote is unavailable"])
+        let backend = RexBackend(connectionFactory: { _ in local }, hostLookup: { try lookup.read() })
+        defer { backend.shutdown() }
+        let recorder = EventRecorder()
+        let observer = Task { for await event in backend.discover() { await recorder.record(event) } }
+        defer { observer.cancel() }
+        try await waitUntil { await recorder.snapshot().finished }
+        #expect(await recorder.snapshot().warnings == ["First remote is unavailable"])
+
+        lookup.set([], warnings: ["Second remote needs authentication"])
+        local.emit("hosts_changed")
+        try await waitUntil { await recorder.snapshot().warnings.contains("Second remote needs authentication") }
+        #expect(await recorder.snapshot().warnings == ["Second remote needs authentication"])
+        #expect(await settledSnapshot(backend).warnings == ["Second remote needs authentication"])
+
+        lookup.set([])
+        local.emit("hosts_changed")
+        let replay = try await eventuallySnapshot(backend) { $0.warnings.isEmpty }
+        #expect(replay.warnings.isEmpty)
+        try await waitUntil { await recorder.snapshot().warnings.isEmpty }
+    }
+
     @Test func layoutFilteringIncludesEveryWindowAndLayerButNotDetachedBlocks() throws {
         let host = RexHost(id: "local", label: "This Mac", server: nil)
         var cache = RexPaneInventory(host: host)
@@ -124,7 +188,7 @@ struct DiscoveryTests {
         let connection = FixtureConnection(views: [view("session:one", blocks: ["block:one"])])
         let factory = FixtureFactory(local: connection)
         let lookup = FixtureHosts([])
-        let backend = RexBackend(connectionFactory: { factory.connection($0) }, hostLookup: { lookup.read() })
+        let backend = RexBackend(connectionFactory: { factory.connection($0) }, hostLookup: { try lookup.read() })
         defer { backend.shutdown() }
         backend.start()
         let first = await settledSnapshot(backend)
@@ -275,7 +339,7 @@ struct DiscoveryTests {
         let remote = RexHost(id: "remote", label: "Remote", server: "Remote")
         let factory = FixtureFactory(local: local, remotes: [failed, recovered])
         let lookup = FixtureHosts([remote])
-        let backend = RexBackend(connectionFactory: { factory.connection($0) }, hostLookup: { lookup.read() }, reconnectDelay: { _ in 50_000_000 })
+        let backend = RexBackend(connectionFactory: { factory.connection($0) }, hostLookup: { try lookup.read() }, reconnectDelay: { _ in 50_000_000 })
         defer { backend.shutdown() }
         let recorder = EventRecorder()
         let observer = Task { for await event in backend.discover() { await recorder.record(event) } }
@@ -307,7 +371,7 @@ struct DiscoveryTests {
         let factory = FixtureFactory(local: local, recoveringLocal: recoveredLocal,
                                      remotes: [homeConnection, remoteConnection])
         let lookup = FixtureHosts([home])
-        let backend = RexBackend(connectionFactory: { factory.connection($0) }, hostLookup: { lookup.read() },
+        let backend = RexBackend(connectionFactory: { factory.connection($0) }, hostLookup: { try lookup.read() },
                                  reconnectDelay: { _ in 50_000_000 })
         defer { backend.shutdown() }
         let recorder = EventRecorder()
@@ -431,7 +495,9 @@ private struct InventorySnapshot {
     var hosts: [RexHost] = []
     var panes: [String: [Pane]] = [:]
     var failures: [String: String] = [:]
-    var warnings: [String] = []
+    private var otherWarnings: [String] = []
+    private var hostDiscoveryWarnings: [String] = []
+    var warnings: [String] { otherWarnings + hostDiscoveryWarnings }
     var finished = false
     mutating func apply(_ event: DiscoveryEvent) {
         switch event {
@@ -442,7 +508,8 @@ private struct InventorySnapshot {
             failures = failures.filter { ids.contains($0.key) }
         case .panes(let host, let values): panes[host.id] = values; failures.removeValue(forKey: host.id)
         case .failed(let host, let message): panes.removeValue(forKey: host.id); failures[host.id] = message
-        case .warning(let message): warnings.append(message)
+        case .warning(let message): otherWarnings.append(message)
+        case .hostDiscoveryWarnings(let messages): hostDiscoveryWarnings = messages
         case .finished: finished = true
         }
     }
@@ -594,11 +661,23 @@ private final class FixtureFactory: @unchecked Sendable {
 private final class FixtureHosts: @unchecked Sendable {
     private let lock = NSLock()
     private var hosts: [RexHost]
+    private var warnings: [String]
+    private var failure: String?
     private var reads = 0
-    init(_ hosts: [RexHost]) { self.hosts = hosts }
+    init(_ hosts: [RexHost], warnings: [String] = []) {
+        self.hosts = hosts
+        self.warnings = warnings
+    }
     var readCount: Int { lock.withLock { reads } }
-    func set(_ values: [RexHost]) { lock.withLock { hosts = values } }
-    func read() -> RexHostInventory {
-        lock.withLock { reads += 1; return RexHostInventory(hosts: hosts, warnings: []) }
+    func set(_ values: [RexHost], warnings: [String] = []) {
+        lock.withLock { hosts = values; self.warnings = warnings; failure = nil }
+    }
+    func fail(_ message: String) { lock.withLock { failure = message } }
+    func read() throws -> RexHostInventory {
+        try lock.withLock {
+            reads += 1
+            if let failure { throw RexBackendError(failure) }
+            return RexHostInventory(hosts: hosts, warnings: warnings)
+        }
     }
 }
