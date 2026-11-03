@@ -26,7 +26,9 @@ References: [Taps](https://docs.brew.sh/Taps), [Creating and maintaining a tap](
 3. Obtain a **team App Store Connect API key** for notarization, its key ID, issuer ID, and private `.p8` file. Retain the private key securely; do not commit it. Use a team key with issuer ID for this workflow rather than relying on differing individual-key support across tool versions.
 4. Record the exact signing identity name, such as `Developer ID Application: Your Name (TEAMID)`, and the matching team ID.
 
-The release script imports the certificate into a temporary keychain, verifies identity/team membership, and removes temporary credentials and that keychain on exit. It signs with hardened runtime and a secure timestamp, requires Apple's notarization status to be **Accepted**, staples the app, and only then generates the distributed ZIP. No sandbox, Apple Events, JIT, or library-validation exception entitlement is enabled.
+The release script captures the original user keychain search list before creating a temporary keychain, then includes that keychain alongside all original entries. This makes the signing keychain available for certificate-chain lookup as well as explicit identity selection with `codesign --keychain`. It verifies identity/team membership and restores the original list on exit, including handled `INT`/`TERM` cancellation, before deleting its own temporary keychain and credential files. Run releases in an isolated runner/user session: restoring the snapshot would overwrite concurrent search-list edits. The script does not change the default keychain or certificate trust settings.
+
+It signs with hardened runtime and a secure timestamp, requires Apple's notarization status to be **Accepted**, staples the app, and only then generates the distributed ZIP. No sandbox, Apple Events, JIT, or library-validation exception entitlement is enabled.
 
 References: [Apple notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow), [notarization requirements](https://developer.apple.com/documentation/security/resolving-common-notarization-issues), [API keys](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api), [GitHub Apple signing setup](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications).
 
@@ -98,6 +100,15 @@ Selecting `main` for that dispatch is intentionally rejected. The workflow never
 ## Failures and safe retries
 
 - Missing/invalid Apple credentials fail explicitly; there is no unsigned production fallback.
+- A search-list restoration failure is reported and fails an otherwise successful command; an existing release failure/cancellation keeps its original exit status. Temporary signing/notarization credentials are still removed. Only the protected `user-keychains.txt` snapshot is retained at the printed recovery path. In the same user session, inspect that snapshot and restore it with:
+
+  ```sh
+  python3 scripts/release-support.py keychains --snapshot "/printed/recovery/path/user-keychains.txt"
+  security list-keychains -d user
+  ```
+
+  After confirming the original list is restored, remove that snapshot and its empty containing directory. Do not `eval` the snapshot or split its paths on whitespace. Uncatchable termination (for example `SIGKILL` or host loss) cannot run shell cleanup; inspect the runner and remove only the release-owned temporary keychain/private directory if they survive.
+- A retry at an existing tag runs the scripts pinned by that tag, not fixes subsequently merged to `main`. For a failed, unpublished release, a maintainer must deliberately choose whether to move the tag after reviewing all draft artifacts, or use a new version/tag. Never move an already published release tag; retrying it does not pick up this correction.
 - The release script produces exactly three distribution files under `dist/MAJOR.MINOR.PATCH/`; it does not publish them by itself and refuses to overwrite an existing version directory. This is separate from SwiftPM's `.build/release` symlink. CI uploads only the explicitly named ZIP, checksum, and cask.
 - Existing GitHub releases or `cask/vX.Y.Z` branches are not overwritten automatically. Inspect drafts, branches, PRs, and the failed job before retrying or performing deliberate cleanup.
 - If draft creation succeeded but cask creation failed, retain the reviewed assets and rerun only the failed portion after correcting repository permissions.
