@@ -188,6 +188,10 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         settingsController?.window?.orderOut(nil)
         setupController?.close()
         let apps = NSRunningApplication.runningApplications(withBundleIdentifier: rexBundleID).filter { !$0.isTerminated }
+        guard !apps.isEmpty else {
+            report("Rex isn’t running. Open Rex, then press the shortcut again.")
+            return
+        }
         let app: NSRunningApplication
         if let frontmost, frontmost.bundleIdentifier == rexBundleID { app = frontmost }
         else if apps.count == 1 { app = apps[0] }
