@@ -23,6 +23,8 @@ On the development host, the incomplete, root-owned `MacOSX12.3.sdk` lacked `SDK
 
 To exercise the UI, quit any installed copy first, then open the development bundle. All copies intentionally share the same bundle ID and preferences. Setup appears on a fresh installation; existing configurations are retained. For UI changes, exercise the real picker and Settings, not only the core tests. In particular, check keyboard focus, first-launch setup, error recovery, cancellation, and light/dark appearance.
 
+Settings update status uses green for up to date, amber/yellow for an available update, red for a failed check, and neutral grey with a spinner while checking. Preserve the text, status icons, and accessibility descriptions, and verify the tinted pill and darker indicator in both light and dark appearance.
+
 The suite does not require a running Rex instance. Live picker tests do require Rex and its local server. macOS privacy permissions used by external test automation are not application requirements.
 
 For startup checks, distinguish no running Rex application from several running copies with none focused. The former should instruct the user to open Rex; the latter should request that they focus the intended copy. Test the no-Rex case in an isolated session rather than terminating a developer's active Rex session.
