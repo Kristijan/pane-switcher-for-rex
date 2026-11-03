@@ -3,6 +3,87 @@ import Testing
 @testable import PaneSwitchCore
 
 struct DiscoveryTests {
+    @Test(arguments: [false, true])
+    func refreshRetriesFailedAndUnprocessedSessionsWithoutLosingNewEvents(malformed: Bool) async throws {
+        let connection = FixtureConnection(views: [
+            view("session:a", blocks: ["block:a"]),
+            view("session:b", blocks: ["block:b"]),
+            view("session:c", blocks: ["block:c"])
+        ])
+        let backend = RexBackend(connectionFactory: { _ in connection },
+                                 hostLookup: { RexHostInventory(hosts: [], warnings: []) })
+        defer { backend.shutdown() }
+        _ = await settledSnapshot(backend)
+        connection.setViews([
+            view("session:a", label: "First update", blocks: ["block:a"]),
+            view("session:b", label: "Updated", blocks: ["block:b"]),
+            view("session:c", label: "Updated", blocks: ["block:c"])
+        ])
+        connection.failNextView("session:b", malformed: malformed)
+        let gate = connection.holdNextView()
+        connection.emit("session_moved")
+        try await waitUntil { await gate.hasArrived }
+        connection.setViews([
+            view("session:a", label: "Newest", blocks: ["block:a-new"]),
+            view("session:b", label: "Updated", blocks: ["block:b"]),
+            view("session:c", label: "Updated", blocks: ["block:c"])
+        ])
+        connection.emit("session_label_changed", session: "session:a", payload: ["label": "Newest"])
+        _ = try await eventuallySnapshot(backend) {
+            $0.panes["local"]?.first(where: { $0.sessionID == "session:a" })?.sessionLabel == "Newest"
+        }
+        await gate.release()
+        let snapshot = try await eventuallySnapshot(backend) {
+            let labels = Dictionary(uniqueKeysWithValues: ($0.panes["local"] ?? []).map { ($0.sessionID, $0.sessionLabel) })
+            return labels == ["session:a": "Newest", "session:b": "Updated", "session:c": "Updated"]
+                && $0.panes["local"]?.contains(where: { $0.blockID == "block:a-new" }) == true
+        }
+        #expect(snapshot.failures.isEmpty)
+        #expect(connection.shutdownCount == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func refreshRetriesListingFailureWithoutAnotherEvent(malformed: Bool) async throws {
+        let connection = FixtureConnection(views: [view("session:old", blocks: ["block:old"])])
+        let backend = RexBackend(connectionFactory: { _ in connection },
+                                 hostLookup: { RexHostInventory(hosts: [], warnings: []) })
+        defer { backend.shutdown() }
+        _ = await settledSnapshot(backend)
+        connection.setViews([view("session:new", blocks: ["block:new"])])
+        connection.failNextListing(malformed: malformed)
+        connection.emit("session_moved")
+        let snapshot = try await eventuallySnapshot(backend) {
+            $0.panes["local"]?.map(\.blockID) == ["block:new"]
+        }
+        #expect(snapshot.failures.isEmpty)
+        #expect(connection.shutdownCount == 0)
+    }
+
+    @Test func listingInvalidationDuringRefreshIsNotClearedByOlderSuccess() async throws {
+        let connection = FixtureConnection(views: [view("session:old", blocks: ["block:old"])])
+        let backend = RexBackend(connectionFactory: { _ in connection },
+                                 hostLookup: { RexHostInventory(hosts: [], warnings: []) })
+        defer { backend.shutdown() }
+        _ = await settledSnapshot(backend)
+        let gate = connection.holdNextListing()
+        connection.emit("session_moved")
+        try await waitUntil { await gate.hasArrived }
+        connection.setViews([
+            view("session:old", label: "Changed", blocks: ["block:old"]),
+            view("session:new", blocks: ["block:new"])
+        ])
+        connection.emit("session_moved")
+        connection.emit("session_label_changed", session: "session:old", payload: ["label": "Changed"])
+        _ = try await eventuallySnapshot(backend) {
+            $0.panes["local"]?.first?.sessionLabel == "Changed"
+        }
+        await gate.release()
+        _ = try await eventuallySnapshot(backend) {
+            Set(($0.panes["local"] ?? []).map(\.blockID)) == ["block:old", "block:new"]
+        }
+        #expect(connection.shutdownCount == 0)
+    }
+
     @Test func metadataFailureKeepsAllPlacedPanesAndRemoteFailureIsIsolated() async throws {
         let local = FixtureConnection(views: [view("session:local", blocks: ["block:placed"])], metadataFails: true)
         let remote = FixtureConnection(views: [], listingFails: true)
@@ -389,6 +470,9 @@ private final class FixtureConnection: RexInventoryConnection, @unchecked Sendab
     private var viewReads = 0
     private var shutdowns = 0
     private var nextViewGate: FixtureRequestGate?
+    private var nextListingGate: FixtureRequestGate?
+    private var viewFailures: [String: Bool] = [:]
+    private var listingFailure: Bool?
     private let stream: AsyncThrowingStream<RexStreamEvent, Error>
     private let continuation: AsyncThrowingStream<RexStreamEvent, Error>.Continuation
 
@@ -407,10 +491,19 @@ private final class FixtureConnection: RexInventoryConnection, @unchecked Sendab
     var shutdownCount: Int { lock.withLock { shutdowns } }
     func setViews(_ values: [[String: Any]]) { lock.withLock { views = values } }
     func setMetadata(_ values: [[String: Any]]) { lock.withLock { metadata = values } }
+    func failNextView(_ session: String, malformed: Bool) { lock.withLock { viewFailures[session] = malformed } }
+    func failNextListing(malformed: Bool) { lock.withLock { listingFailure = malformed } }
     func holdNextView() -> FixtureRequestGate {
         lock.withLock {
             let gate = FixtureRequestGate()
             nextViewGate = gate
+            return gate
+        }
+    }
+    func holdNextListing() -> FixtureRequestGate {
+        lock.withLock {
+            let gate = FixtureRequestGate()
+            nextListingGate = gate
             return gate
         }
     }
@@ -436,6 +529,10 @@ private final class FixtureConnection: RexInventoryConnection, @unchecked Sendab
             }
             if let sessions = arguments["sessions"] as? [String] {
                 viewReads += 1
+                if let session = sessions.first, let malformed = viewFailures.removeValue(forKey: session) {
+                    if malformed { return (["views": ["invalid"], "errors": []], nil) }
+                    throw RexConnectionError.requestFailed("Temporary session view failure")
+                }
                 let selected = views.filter { sessions.contains($0["session_id"] as? String ?? "") }
                 let present = Set(selected.compactMap { $0["session_id"] as? String })
                 let gate = nextViewGate
@@ -444,8 +541,15 @@ private final class FixtureConnection: RexInventoryConnection, @unchecked Sendab
                     ["session_id": $0, "message": "Session no longer exists"]
                 }], gate)
             }
+            if let malformed = listingFailure {
+                listingFailure = nil
+                if malformed { return (["sessions": ["invalid"]], nil) }
+                throw RexConnectionError.requestFailed("Temporary session listing failure")
+            }
             if listingFails { throw RexConnectionError.disconnected("Remote is unreachable") }
-            return (["sessions": views.map { ["session_id": $0["session_id"] as? String ?? ""] }], nil)
+            let gate = nextListingGate
+            nextListingGate = nil
+            return (["sessions": views.map { ["session_id": $0["session_id"] as? String ?? ""] }], gate)
         }
         if let gate { await gate.wait() }
         return object

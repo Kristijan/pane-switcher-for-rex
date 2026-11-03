@@ -428,8 +428,10 @@ private actor RexInventory {
               !state.dirty.isEmpty || state.needsListing, !lifetime.isStopped else { return }
         let hostID = state.host.id
         let epoch = state.epoch
+        let delay: UInt64 = state.refreshFailures == 0
+            ? 40_000_000 : 250_000_000 << (state.refreshFailures - 1)
         let task = Task { [weak self] in
-            do { try await Task.sleep(nanoseconds: 40_000_000) } catch { return }
+            do { try await Task.sleep(nanoseconds: delay) } catch { return }
             await self?.drainRefreshes(hostID, epoch: epoch)
         }
         state.refreshTask = task
@@ -442,8 +444,10 @@ private actor RexInventory {
             try await refresh(state, epoch: epoch)
             guard current(hostID, epoch) != nil else { return }
             await enrich(state, epoch: epoch)
+            state.refreshFailures = 0
         } catch {
             guard current(hostID, epoch) != nil, !Task.isCancelled else { return }
+            state.refreshFailures = min(state.refreshFailures + 1, 6)
             warn("\(state.host.label): could not refresh panes (\(error.localizedDescription)).")
         }
         guard current(hostID, epoch) != nil else { return }
@@ -460,32 +464,43 @@ private actor RexInventory {
         if state.needsListing {
             state.needsListing = false
             let version = state.cache.version
-            let listing = try await execute(state.host.id, script: Self.listingScript)
-            guard current(state.host.id, epoch) != nil else { return }
-            var listed = Set<String>()
-            for value in try rexArray(listing["sessions"], field: "sessions") {
-                guard let session = value as? [String: Any], let id = rexNonempty(session["session_id"]) else {
-                    throw RexBackendError("Rex returned a session without an ID.")
+            do {
+                let listing = try await execute(state.host.id, script: Self.listingScript)
+                guard current(state.host.id, epoch) != nil else { return }
+                var listed = Set<String>()
+                for value in try rexArray(listing["sessions"], field: "sessions") {
+                    guard let session = value as? [String: Any], let id = rexNonempty(session["session_id"]) else {
+                        throw RexBackendError("Rex returned a session without an ID.")
+                    }
+                    listed.insert(id)
                 }
-                listed.insert(id)
+                for id in state.cache.sessionIDs.subtracting(listed) where !state.cache.changed(id, since: version) {
+                    state.cache.removeSession(id)
+                }
+                state.dirty.formUnion(listed)
+            } catch {
+                if current(state.host.id, epoch) != nil { state.needsListing = true }
+                throw error
             }
-            for id in state.cache.sessionIDs.subtracting(listed) where !state.cache.changed(id, since: version) {
-                state.cache.removeSession(id)
-            }
-            state.dirty.formUnion(listed)
         }
         let sessions = Array(state.dirty).sorted()
-        state.dirty.removeAll()
         for session in sessions {
-            try Task.checkCancellation()
-            let version = state.cache.version
-            // One session per request leaves room for interactive client/switch requests in the
-            // persistent worker queue, even when a host contains a very large inventory.
-            let snapshot = try await execute(state.host.id, script: Self.viewsScript,
-                                             arguments: ["sessions": [session]])
-            guard current(state.host.id, epoch) != nil else { return }
-            try apply(snapshot, to: state, since: version)
-            publish(state)
+            // Consume only this request's invalidation. New events received while it
+            // awaits remain dirty, and unprocessed sessions stay pending on failure.
+            state.dirty.remove(session)
+            do {
+                try Task.checkCancellation()
+                let version = state.cache.version
+                // One session per request lets interactive work interleave with refreshes.
+                let snapshot = try await execute(state.host.id, script: Self.viewsScript,
+                                                 arguments: ["sessions": [session]])
+                guard current(state.host.id, epoch) != nil else { return }
+                try apply(snapshot, to: state, since: version)
+                publish(state)
+            } catch {
+                if current(state.host.id, epoch) != nil { state.dirty.insert(session) }
+                throw error
+            }
         }
         publish(state)
     }
@@ -696,6 +711,7 @@ private actor RexInventory {
         var initialSettled = false
         var failure: String?
         var retryAttempt = 0
+        var refreshFailures = 0
 
         init(host: RexHost) { self.host = host; cache = RexPaneInventory(host: host) }
         func cancelTasks() {
