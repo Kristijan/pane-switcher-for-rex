@@ -38,6 +38,8 @@ Keep tests deterministic and independent of personal host names, running Rex ses
 
 For concurrent transport tests, hold fixture requests behind explicit release signals rather than fixed sleeps. The queued-deadline test releases its active request only after the queued request expires, so CI scheduling delays cannot accidentally send that request.
 
+An unsent request whose deadline expires reports `RexConnectionError.queueExpired`; it must not disconnect the worker or clear the backend inventory. In-flight timeouts still disconnect because their outcome is unknown. The backend regression holds a real worker request while a client lookup reaches its normal 8-second deadline, then verifies cached panes and worker reuse.
+
 Warm-cache discovery refresh failures retain pending listing/session work and retry without requiring another event. Retries back off from 250 ms to a maximum of 8 seconds, resetting after a successful refresh. Recovery tests must cover request errors, malformed responses, and invalidations arriving while a snapshot is in flight; non-disconnecting failures must preserve cached panes and the connection.
 
 ## Releases

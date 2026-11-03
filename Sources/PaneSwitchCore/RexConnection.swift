@@ -11,10 +11,13 @@ struct RexStreamEvent: @unchecked Sendable {
 enum RexConnectionError: Error, LocalizedError {
     case disconnected(String)
     case requestFailed(String)
+    // The request was never sent; the worker and any active request remain healthy.
+    case queueExpired
 
     var errorDescription: String? {
         switch self {
         case .disconnected(let message), .requestFailed(let message): return message
+        case .queueExpired: return "Rex request timed out before it could be sent."
         }
     }
 }
@@ -75,7 +78,7 @@ final class RexConnection: @unchecked Sendable {
                     } else if request.isCancelled {
                         continuation.resume(throwing: CancellationError())
                     } else if DispatchTime.now() >= deadline {
-                        continuation.resume(throwing: RexConnectionError.disconnected("Rex request timed out before it could be sent."))
+                        continuation.resume(throwing: RexConnectionError.queueExpired)
                     } else {
                         request.continuation = continuation
                         request.frame = frame
@@ -188,7 +191,7 @@ final class RexConnection: @unchecked Sendable {
                 continue
             }
             if DispatchTime.now() >= request.expires {
-                finish(request, error: RexConnectionError.disconnected("Rex request timed out before it could be sent."))
+                finish(request, error: RexConnectionError.queueExpired)
                 continue
             }
             active = request
@@ -226,7 +229,7 @@ final class RexConnection: @unchecked Sendable {
         } else {
             // An unsent request cannot have changed server state. Do not interrupt
             // an unrelated in-flight focus operation just because its queue is full.
-            finish(request, error: RexConnectionError.disconnected("Rex request timed out before it could be sent."))
+            finish(request, error: RexConnectionError.queueExpired)
         }
     }
 

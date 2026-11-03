@@ -87,12 +87,71 @@ struct RexConnectionTests {
             Issue.record("A canceled queued call must not be sent.")
         } catch is CancellationError {}
         let expired = Task { try await connection.execute("expired-request", timeout: 0.03) }
-        #expect(isDisconnected(await expired.result))
+        guard case .failure(let error) = await expired.result,
+              case .queueExpired = error as? RexConnectionError else {
+            Issue.record("An unsent request must expire without reporting a disconnection.")
+            try Data().write(to: fixture.directory.appendingPathComponent("release"))
+            _ = try await active.value
+            return
+        }
         try Data().write(to: fixture.directory.appendingPathComponent("release"))
         let first = try await active.value
         let second = try await connection.execute("next-request")
         #expect(first["pid"] as? Int == second["pid"] as? Int)
         #expect(second["count"] as? Int == 2)
+    }
+
+    @Test func queuedBackendRequestExpirationPreservesWorkerAndInventory() async throws {
+        let fixture = try Fixture(#"""
+        for argument in "$@"; do
+            if [ "$argument" = --all ]; then
+                printf '%s\n' '{"type":"ready","payload":{}}'
+                exec /bin/sleep 30
+            fi
+        done
+        """# + loop(#"""
+        case "$request" in
+            *hold-request*)
+                : > "$directory/active"
+                while [ ! -f "$directory/release" ]; do /bin/sleep 0.01; done
+                ;;
+        esac
+        respond "{\\\"pid\\\":$$,\\\"count\\\":$count,\\\"sessions\\\":[{\\\"session_id\\\":\\\"session:s\\\"}],\\\"views\\\":[{\\\"session_id\\\":\\\"session:s\\\",\\\"windows\\\":[{\\\"window_id\\\":\\\"window:w\\\",\\\"layers\\\":[{\\\"layout\\\":{\\\"block_id\\\":\\\"block:b\\\"},\\\"blocks\\\":[{\\\"block_id\\\":\\\"block:b\\\"}]}]}]}],\\\"errors\\\":[],\\\"items\\\":[],\\\"unavailable\\\":0}"
+        """#))
+        let connection = fixture.connection()
+        let backend = RexBackend(connectionFactory: { _ in connection },
+                                 hostLookup: { RexHostInventory(hosts: [], warnings: []) },
+                                 reconnectDelay: { _ in 60_000_000_000 })
+        defer { backend.shutdown() }
+        func cachedPaneIDs() async -> [String] {
+            var ids: [String] = []
+            for await event in backend.discover() {
+                if case .panes(_, let panes) = event { ids = panes.map(\.blockID) }
+                if case .finished = event { break }
+            }
+            return ids
+        }
+        #expect(await cachedPaneIDs() == ["block:b"])
+        let active = Task { try await connection.execute("hold-request", timeout: 20) }
+        try await fixture.waitForFile("active")
+        do {
+            _ = try await backend.appClients()
+            Issue.record("The backend request must expire while the worker is held.")
+        } catch let error as RexConnectionError {
+            guard case .queueExpired = error else {
+                Issue.record("Queued expiration must not be reported as a broken connection.")
+                try Data().write(to: fixture.directory.appendingPathComponent("release"))
+                #expect(await cachedPaneIDs() == ["block:b"])
+                _ = try await active.value
+                return
+            }
+        }
+        #expect(await cachedPaneIDs() == ["block:b"])
+        try Data().write(to: fixture.directory.appendingPathComponent("release"))
+        let held = try await active.value
+        let next = try await connection.execute("next-request")
+        #expect(held["pid"] as? Int == next["pid"] as? Int)
+        #expect(next["count"] as? Int == (held["count"] as? Int).map { $0 + 1 })
     }
 
     @Test func inFlightCancellationResetsWorkerAndCanReconnect() async throws {
