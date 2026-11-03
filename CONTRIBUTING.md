@@ -31,6 +31,14 @@ When exercising picker cancellation, interrupt an in-flight opening lookup with 
 
 With the global shortcut enabled, open the picker from another app, enter a query and select a pane, then press the shortcut again. The existing picker must regain focus without changing the query or selected pane, and Escape must return to the app from which that picker session originally opened. Opening Settings must continue to dismiss the picker rather than reuse its session.
 
+### Search behavior
+
+Each whitespace-separated query token must fuzzy-match entirely within one metadata field: pane label, title, command, directory, host label, session label, or window label. Different tokens may match different fields, in any order. Matching is case- and diacritic-insensitive; a host-label-only match is valid. For example, `docker` must not be assembled from `Desktop` in the directory, `Local` in the host label, and `picker` in the session label.
+
+Ranking sums each token's best individual-field score, favoring contiguous and word-boundary matches over scattered characters. Repeating a match in multiple fields does not add points, and a field's position in the metadata list does not penalize its match. Equal scores retain deterministic local/host/session/window/pane ordering. Host/location operators still filter inventory separately; highlighting traces each token independently within each displayed line and excludes filter operators and host arguments.
+
+Normalize fields and cache their character/boundary data when inventory changes, not on every keystroke. Query scoring reuses scratch buffers across fields, panes, and tokens, sized to the longest individual field. Keep the cross-field rejection, same-field fuzzy, multiword cross-field, ranking, filter, and Unicode/highlight regressions when changing search.
+
 ### Application data
 
 Settings (`config.json`) and recent-pane history (`recent-panes.json`) live in `~/Library/Application Support/Pane Switcher for Rex/`.

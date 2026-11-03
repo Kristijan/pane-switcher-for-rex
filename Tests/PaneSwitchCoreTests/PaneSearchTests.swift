@@ -34,6 +34,27 @@ struct PaneSearchTests {
         #expect(PaneSearch.results([target], query: "swift nonexistent").isEmpty)
     }
 
+    @Test func fuzzyTokensCannotBeAssembledAcrossMetadataFields() {
+        // "do" in Desktop, "c" in Local, then "ker" in picker used to form "docker".
+        let unrelated = pane("unrelated", session: "picker", directory: "/Users/me/Desktop")
+        let sameField = pane("same-field", title: "d__o__c__k__e__r")
+        let hostOnly = pane("host-only", host: "Docker")
+        let index = PaneSearch.Index([unrelated, sameField, hostOnly])
+        #expect(index.results(query: "docker").map(\.id) == [hostOnly.id, sameField.id])
+        #expect(index.results(query: "docker picker").isEmpty)
+    }
+
+    @Test func rankingUsesOnlyTheBestFieldForEachToken() {
+        let laterExact = pane("later-exact", label: "a________b________c", title: "abc")
+        let earlierExact = pane("earlier-exact", label: "abc")
+        let repeatedFuzzy = pane("repeated-fuzzy", label: "a________b________c",
+                                 title: "a________b________c", command: "a________b________c")
+        let expected = [laterExact.id, earlierExact.id, repeatedFuzzy.id]
+        let input = [repeatedFuzzy, earlierExact, laterExact]
+        #expect(PaneSearch.results(input, query: "abc").map(\.id) == expected)
+        #expect(PaneSearch.results(Array(input.reversed()), query: "abc").map(\.id) == expected)
+    }
+
     @Test func contiguousMatchesOutrankWideSubsequences() {
         let compact = pane("compact", title: "abc")
         let spread = pane("spread", title: "a________b________c")

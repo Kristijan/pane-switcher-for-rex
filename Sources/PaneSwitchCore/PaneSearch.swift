@@ -157,14 +157,16 @@ public enum PaneSearch {
     /// Reuse an index while the user types; only inventory changes require normalization again.
     public struct Index: Sendable {
         private let entries: [Entry]
-        private let maximumTextLength: Int
+        private let maximumFieldLength: Int
 
         public init(_ panes: [Pane]) {
             entries = panes.map(Entry.init).sorted {
                 if $0.isLocal != $1.isLocal { return $0.isLocal }
                 return $0.sortKey.lexicographicallyPrecedes($1.sortKey)
             }
-            maximumTextLength = entries.reduce(0) { max($0, $1.text.count) }
+            maximumFieldLength = entries.reduce(0) { maximum, entry in
+                entry.fields.reduce(maximum) { max($0, $1.text.count) }
+            }
         }
 
         public func results(query: String) -> [Pane] {
@@ -177,20 +179,26 @@ public enum PaneSearch {
             }
             var matches: [(index: Int, score: Int)] = []
             matches.reserveCapacity(entries.count)
-            // Share scratch buffers across all entries and tokens, rather than allocating per match.
-            var previous = Array(repeating: Int.min / 4, count: maximumTextLength)
-            var current = previous
+            // Share scratch buffers across all entries, fields and tokens, sized for the longest field.
+            var previous = Array(repeating: Int.min / 4, count: maximumFieldLength)
+            var current = Array(repeating: Int.min / 4, count: maximumFieldLength)
             for (index, entry) in entries.enumerated() {
                 guard parsed.matches(isLocal: entry.isLocal, normalizedHostLabel: entry.hostLabel) else { continue }
                 var total = 0
                 var matched = true
                 for token in tokens {
-                    guard let score = score(token, in: entry.text, boundaries: entry.boundaries,
-                                          previous: &previous, current: &current) else {
+                    var best: Int?
+                    for field in entry.fields {
+                        if let candidate = score(token, in: field.text, boundaries: field.boundaries,
+                                                 previous: &previous, current: &current) {
+                            best = max(best ?? candidate, candidate)
+                        }
+                    }
+                    guard let best else {
                         matched = false
                         break
                     }
-                    total += score
+                    total += best
                 }
                 if matched { matches.append((index, total)) }
             }
@@ -201,23 +209,30 @@ public enum PaneSearch {
         }
     }
 
+    private struct Field: Sendable {
+        let text: [Character]
+        let boundaries: [Bool]
+
+        init(normalized: String) {
+            text = Array(normalized)
+            boundaries = PaneSearch.boundaries(in: text)
+        }
+    }
+
     private struct Entry: Sendable {
         let pane: Pane
         let isLocal: Bool
         let hostLabel: String
-        let text: [Character]
-        let boundaries: [Bool]
+        let fields: [Field]
         let sortKey: [String]
 
         init(_ pane: Pane) {
             self.pane = pane
             isLocal = pane.host.server == nil
-            hostLabel = normalize(pane.host.label)
-            let fields = [pane.label, pane.title, pane.command, pane.directory,
-                          pane.host.label, pane.sessionLabel, pane.windowLabel]
-            let characters = Array(normalize(fields.joined(separator: " ")))
-            text = characters
-            boundaries = PaneSearch.boundaries(in: characters)
+            let normalizedFields = [pane.label, pane.title, pane.command, pane.directory,
+                                    pane.host.label, pane.sessionLabel, pane.windowLabel].map(normalize)
+            hostLabel = normalizedFields[4]
+            fields = normalizedFields.map { Field(normalized: $0) }
             let order = [pane.host.label, pane.sessionLabel, pane.windowLabel,
                          pane.label, pane.title, pane.command, pane.directory,
                          pane.host.id, pane.sessionID, pane.windowID, pane.blockID]
