@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Validate public release inputs and generate a cask from a real release ZIP."""
+"""Validate releases, manage temporary keychain search lists, and generate casks."""
 
 import argparse
 import hashlib
 import pathlib
 import plistlib
 import re
+import shlex
+import subprocess
 import sys
 import zipfile
 
@@ -87,6 +89,19 @@ end
     return sha256
 
 
+def keychain_list(snapshot, append=None, check=False):
+    # security prints quoted paths. Parse quoting without evaluating shell syntax or
+    # splitting paths containing spaces; subprocess passes each path as one argument.
+    paths = shlex.split(snapshot.read_text(encoding="utf-8"), comments=False, posix=True)
+    if any(not path.startswith("/") or "\0" in path for path in paths):
+        raise ValueError("keychain snapshot must contain absolute paths")
+    if check:
+        return
+    if append is not None:
+        paths.append(str(append))
+    subprocess.run(["security", "list-keychains", "-d", "user", "-s", *paths], check=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -98,14 +113,23 @@ def main():
     cask.add_argument("--version", required=True)
     cask.add_argument("--zip", dest="archive", type=pathlib.Path, required=True)
     cask.add_argument("--output", type=pathlib.Path, required=True)
+    keychains = commands.add_parser("keychains", help="check or restore a user keychain search-list snapshot")
+    keychains.add_argument("--snapshot", type=pathlib.Path, required=True)
+    action = keychains.add_mutually_exclusive_group()
+    action.add_argument("--append", type=pathlib.Path)
+    action.add_argument("--check", action="store_true")
     args = parser.parse_args()
     try:
         if args.command == "validate":
             print(validate_bundle(args.plist, args.tag, args.architectures))
+        elif args.command == "keychains":
+            keychain_list(args.snapshot, args.append, args.check)
         else:
             print(generate_cask(args.version, args.archive, args.output))
     except (OSError, ValueError, plistlib.InvalidFileException) as error:
         parser.exit(1, f"release: {error}\n")
+    except subprocess.CalledProcessError as error:
+        parser.exit(error.returncode, f"release: keychain search-list update failed ({error.returncode})\n")
 
 
 if __name__ == "__main__":

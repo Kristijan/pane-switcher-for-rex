@@ -29,22 +29,57 @@ if [[ "$IDENTITY" != 'Developer ID Application: '* || "$IDENTITY" != *" ($APPLE_
   exit 1
 fi
 umask 077
-TEMP="$(mktemp -d "${TMPDIR:-/tmp}/PaneSwitch-release.XXXXXX")"
+RECOVERY="$(mktemp -d "${TMPDIR:-/tmp}/PaneSwitch-release.XXXXXX")"
+SNAPSHOT="$RECOVERY/user-keychains.txt"
+TEMP="$RECOVERY/private"
 KEYCHAIN="$TEMP/release.keychain-db"
+RESTORE_KEYCHAINS=0
+KEYCHAIN_CREATED=0
 cleanup() {
   local result=$?
+  local restored=1
   trap - EXIT
-  security delete-keychain "$KEYCHAIN" >/dev/null 2>&1 || true
-  rm -rf "$TEMP"
+  trap '' INT TERM
+  if [[ "$RESTORE_KEYCHAINS" == 1 ]]; then
+    if ! python3 "$ROOT/scripts/release-support.py" keychains --snapshot "$SNAPSHOT"; then
+      restored=0
+      printf 'Failed to restore user keychain search list; recovery snapshot retained at %s\n' "$SNAPSHOT" >&2
+      if [[ "$result" == 0 ]]; then result=1; fi
+    fi
+  fi
+  if [[ "$KEYCHAIN_CREATED" == 1 ]]; then
+    if ! security delete-keychain "$KEYCHAIN"; then
+      printf 'Failed to unregister temporary keychain %s; removing its private files.\n' "$KEYCHAIN" >&2
+      if [[ "$result" == 0 ]]; then result=1; fi
+    fi
+  fi
+  if ! rm -rf "$TEMP"; then
+    printf 'Failed to remove temporary private files at %s\n' "$TEMP" >&2
+    if [[ "$result" == 0 ]]; then result=1; fi
+  fi
+  if [[ "$restored" == 1 ]]; then
+    if ! rm -rf "$RECOVERY"; then
+      printf 'Failed to remove release recovery directory %s\n' "$RECOVERY" >&2
+      if [[ "$result" == 0 ]]; then result=1; fi
+    fi
+  fi
   exit "$result"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+mkdir "$TEMP"
+# Capture and validate before create-keychain, which can itself mutate the list.
+security list-keychains -d user > "$SNAPSHOT"
+python3 "$ROOT/scripts/release-support.py" keychains --snapshot "$SNAPSHOT" --check
+RESTORE_KEYCHAINS=1
 KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
 printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$TEMP/certificate.p12"
 printf '%s' "$NOTARY_PRIVATE_KEY" > "$TEMP/notary-key.p8"
+# Mark ownership before creation so cleanup also handles a partially failed create.
+KEYCHAIN_CREATED=1
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+python3 "$ROOT/scripts/release-support.py" keychains --snapshot "$SNAPSHOT" --append "$KEYCHAIN"
 security set-keychain-settings -lut 21600 "$KEYCHAIN"
 security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
 security import "$TEMP/certificate.p12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security >/dev/null
