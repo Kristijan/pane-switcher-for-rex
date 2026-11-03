@@ -93,8 +93,7 @@ jobs:
       - name: Create review-only draft with the three distribution assets
         run: |
           gh release create "$RELEASE_TAG" distribution/*.zip distribution/*.sha256 distribution/*.rb \
-            --repo "$GH_REPO" --verify-tag --draft --title "$RELEASE_TAG" \
-            --notes 'Signed and notarized Apple Silicon build for macOS 15 or later. Maintainer: inspect these assets, publish this release, then review and merge the generated Homebrew cask PR. The app has no self-updater.'
+            --repo "$GH_REPO" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes
 
   cask:
     name: Open draft cask update PR

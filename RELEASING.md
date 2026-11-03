@@ -84,7 +84,7 @@ References: [GitHub environment protection](https://docs.github.com/en/actions/h
    - `Pane-Switcher-for-Rex-1.0.0-arm64.zip.sha256`
    - `pane-switcher-for-rex.rb`
 
-5. Inspect the Actions result and draft release. Download the actual ZIP and verify its checksum. Test the signed app on an Apple Silicon Mac, including first launch, setup, local/remote pane activation, About, and quitting. Review/edit the release notes.
+5. Inspect the Actions result and draft release. Download the actual ZIP and verify its checksum. Test the signed app on an Apple Silicon Mac, including first launch, setup, local/remote pane activation, About, and quitting. The workflow uses GitHub's automatically generated release notes, including merged pull requests and contributor attribution. Review/edit these notes before publication; generation does not publish the release.
 6. **Publish the reviewed GitHub draft release.** Draft assets cannot be downloaded publicly by Homebrew.
 7. Review the generated **draft cask PR**. Approve its workflow run if GitHub requests that approval, wait for CI, then mark it ready and merge it **only after the matching release is public**. This first PR creates `Casks/pane-switcher-for-rex.rb`; subsequent releases update it.
 8. Verify a real Homebrew install/upgrade and a direct download. Installation is not available until both the release assets and cask are public.
