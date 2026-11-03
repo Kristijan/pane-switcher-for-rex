@@ -34,6 +34,7 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     private var settingsController: SettingsController?
     private var setupController: SetupController?
     private var opening: Task<Void, Never>?
+    private var openingInvocation = UUID()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -97,8 +98,7 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configure(_ value: PickerSettings, shortcut: PickerShortcut, executable: URL) {
-        opening?.cancel()
-        opening = nil
+        cancelOpening()
         picker?.dismissForSettings()
         hotKey?.stop()
         let backend: RexBackend
@@ -173,6 +173,12 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = menu
     }
 
+    private func cancelOpening() {
+        openingInvocation = UUID()
+        opening?.cancel()
+        opening = nil
+    }
+
     @objc private func showPicker() {
         let requestedAt = ContinuousClock.now
         guard opening == nil else { return }
@@ -185,22 +191,31 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         if let frontmost, frontmost.bundleIdentifier == rexBundleID { app = frontmost }
         else if apps.count == 1 { app = apps[0] }
         else { report("Focus the Rex app you want to switch in, then press the shortcut."); return }
+        let run = UUID()
+        openingInvocation = run
         opening = Task { [weak self] in
-            defer { self?.opening = nil }
+            defer {
+                if self?.openingInvocation == run { self?.opening = nil }
+            }
             do {
                 let clients = try await backend.appClients()
+                guard !Task.isCancelled, let self, self.openingInvocation == run else { return }
                 let matching = clients.filter { $0.pid == app.processIdentifier }
                 guard matching.count == 1, let client = matching.first else {
                     throw PickerError("Cannot identify this Rex app's local client. Keep Rex and its local server running.")
                 }
                 guard !Task.isCancelled, !app.isTerminated else { return }
                 picker.show(clientID: client.id, rexApp: app, returningTo: frontmost, requestedAt: requestedAt)
-            } catch { if !Task.isCancelled { self?.report(error.localizedDescription) } }
+            } catch {
+                if !Task.isCancelled, let self, self.openingInvocation == run {
+                    self.report(error.localizedDescription)
+                }
+            }
         }
     }
 
     @objc private func openSettings() {
-        opening?.cancel(); opening = nil
+        cancelOpening()
         setupController?.close()
         picker?.dismissForSettings()
         if settingsController == nil {
@@ -217,7 +232,7 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openSetup(message: String? = nil) {
-        opening?.cancel(); opening = nil
+        cancelOpening()
         picker?.dismissForSettings()
         settingsController?.close()
         if setupController?.window?.isVisible == true {
@@ -296,7 +311,7 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     @objc private func quit() { NSApp.terminate(nil) }
     func applicationWillTerminate(_ notification: Notification) {
         setupController?.cancelChecks()
-        opening?.cancel(); picker?.dismissForSettings(); hotKey?.stop(); backend?.shutdown()
+        cancelOpening(); picker?.dismissForSettings(); hotKey?.stop(); backend?.shutdown()
         DistributedNotificationCenter.default().removeObserver(self)
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
