@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: Tests and arm64 app
+    # Official public Apple Silicon runner; the build also verifies uname and lipo.
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Require Apple Silicon
+        run: test "$(uname -m)" = arm64
+      - name: Release input and cask consumer tests
+        run: python3 scripts/test-release.py
+      - name: Full Swift suite
+        run: scripts/test.sh
+      - name: Build development app
+        run: scripts/build-app.sh
+      - name: Smoke packaged app
+        run: scripts/smoke-app.sh
+      - name: Exercise ZIP and cask packaging without production credentials
+        shell: bash
+        run: |
+          VERSION="$(python3 scripts/release-support.py validate --plist Resources/Info.plist)"
+          ZIP="$RUNNER_TEMP/Pane-Switcher-for-Rex-$VERSION-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent '.build/Pane Switcher for Rex.app' "$ZIP"
+          python3 scripts/release-support.py cask --version "$VERSION" --zip "$ZIP" --output "$RUNNER_TEMP/pane-switcher-for-rex.rb"
+          ruby -c "$RUNNER_TEMP/pane-switcher-for-rex.rb"
+          mkdir "$RUNNER_TEMP/extracted"
+          ditto -x -k "$ZIP" "$RUNNER_TEMP/extracted"
+          scripts/smoke-app.sh "$RUNNER_TEMP/extracted/Pane Switcher for Rex.app"
+
+  workflows:
+    name: Workflow and shell syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Check every distribution shell entrypoint
+        run: |
+          for script in scripts/*.sh; do
+            bash -n "$script"
+          done
+      - name: Lint all workflows, including release paths
+        # Install a fixed upstream version, with module checksums verified by Go.
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          "$(go env GOPATH)/bin/actionlint" -color

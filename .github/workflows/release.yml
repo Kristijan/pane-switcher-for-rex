@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag matching Info.plist (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Sign and notarize arm64 app
+    if: github.repository == 'Kristijan/pane-switcher-for-rex'
+    runs-on: macos-15
+    timeout-minutes: 90
+    environment: production-release
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # A manual run must resolve an existing TAG, never a similarly named branch.
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - name: Validate release tag, bundle, and host
+        id: version
+        shell: bash
+        run: |
+          test "$(uname -m)" = arm64
+          if [[ "$GITHUB_REF_TYPE" != tag || "$GITHUB_REF_NAME" != "$RELEASE_TAG" ]]; then
+            printf 'Select the same existing release tag as the manual workflow ref and tag input.\n' >&2
+            exit 1
+          fi
+          VERSION="$(python3 scripts/release-support.py validate --plist Resources/Info.plist --tag "$RELEASE_TAG")"
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - name: Release input and cask consumer tests
+        run: python3 scripts/test-release.py
+      - name: Full Swift suite
+        run: scripts/test.sh
+      - name: Sign, notarize, staple, and generate final artifacts
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          DEVELOPER_ID_APPLICATION_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+          NOTARY_PRIVATE_KEY: ${{ secrets.NOTARY_PRIVATE_KEY }}
+        run: scripts/release.sh "$RELEASE_TAG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: production-distribution
+          path: |
+            dist/${{ steps.version.outputs.version }}/Pane-Switcher-for-Rex-${{ steps.version.outputs.version }}-arm64.zip
+            dist/${{ steps.version.outputs.version }}/Pane-Switcher-for-Rex-${{ steps.version.outputs.version }}-arm64.zip.sha256
+            dist/${{ steps.version.outputs.version }}/pane-switcher-for-rex.rb
+          if-no-files-found: error
+          retention-days: 14
+
+  draft:
+    name: Upload draft release
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: Kristijan/pane-switcher-for-rex
+      RELEASE_TAG: ${{ needs.package.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: production-distribution
+          path: distribution
+      - name: Verify artifact checksums
+        working-directory: distribution
+        run: sha256sum --check --strict ./*.sha256
+      - name: Create review-only draft with the three distribution assets
+        run: |
+          gh release create "$RELEASE_TAG" distribution/*.zip distribution/*.sha256 distribution/*.rb \
+            --repo "$GH_REPO" --verify-tag --draft --title "$RELEASE_TAG" \
+            --notes 'Signed and notarized Apple Silicon build for macOS 15 or later. Maintainer: inspect these assets, publish this release, then review and merge the generated Homebrew cask PR. The app has no self-updater.'
+
+  cask:
+    name: Open draft cask update PR
+    needs: [package, draft]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.package.outputs.tag }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: production-distribution
+          path: distribution
+      - name: Create cask-only branch and draft pull request
+        run: scripts/create-cask-pr.sh "$RELEASE_TAG" "$GITHUB_WORKSPACE/distribution"
