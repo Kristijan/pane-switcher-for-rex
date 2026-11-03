@@ -12,6 +12,7 @@ let package = Package(
         .target(name: "PaneSwitchCore"),
         .executableTarget(name: "PaneSwitch", dependencies: ["PaneSwitchCore"]),
         .testTarget(name: "PaneSwitchCoreTests", dependencies: ["PaneSwitchCore"]),
+        .testTarget(name: "PaneSwitchTests", dependencies: ["PaneSwitch", "PaneSwitchCore"]),
     ],
     swiftLanguageModes: [.v5]
 )

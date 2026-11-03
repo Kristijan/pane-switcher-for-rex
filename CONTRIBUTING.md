@@ -19,6 +19,8 @@ To exercise the UI, quit any installed copy first, then open the development bun
 
 The suite does not require a running Rex instance. Live picker tests do require Rex and its local server. macOS privacy permissions used by external test automation are not application requirements.
 
+The AppKit interaction tests dispatch real local mouse events through the picker, including its host-suggestion child window and nested children. For live UI checks, type `host:`, click a suggestion, and confirm that it inserts a host pill without dismissing the picker; clicks in an unrelated window must still dismiss it.
+
 ### Application data
 
 Settings (`config.json`) and recent-pane history (`recent-panes.json`) live in `~/Library/Application Support/Pane Switcher for Rex/`.

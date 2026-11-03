@@ -621,11 +621,25 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         return false
     }
 
+    private func containsInteractionWindow(_ window: NSWindow?) -> Bool {
+        var candidate = window
+        while let current = candidate {
+            if current === panel { return true }
+            candidate = current.parent
+        }
+        return false
+    }
+
+    private func containsInteractionPoint(_ point: NSPoint, in window: NSWindow) -> Bool {
+        if window.isVisible, window.frame.contains(point) { return true }
+        return window.childWindows?.contains { containsInteractionPoint(point, in: $0) } ?? false
+    }
+
     private func installOutsideMonitors() {
         let run = invocation
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
             guard let self, self.invocation == run else { return event }
-            if event.window !== self.panel, !self.isSwitching {
+            if !self.containsInteractionWindow(event.window), !self.isSwitching {
                 self.close(restoreActivation: false)
             }
             return event
@@ -633,7 +647,9 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.invocation == run, !self.isSwitching else { return }
-                if !self.panel.frame.contains(NSEvent.mouseLocation) { self.close(restoreActivation: false) }
+                if !self.containsInteractionPoint(NSEvent.mouseLocation, in: self.panel) {
+                    self.close(restoreActivation: false)
+                }
             }
         }
     }
