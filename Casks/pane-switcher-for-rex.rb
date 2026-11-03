@@ -1,6 +1,6 @@
 cask "pane-switcher-for-rex" do
-  version "1.0.0"
-  sha256 "8992658558aa94115b35fd7da44cc7ad94105d28d8359ab4ba529c485f837417"
+  version "1.0.1"
+  sha256 "aca3329ef3b53370aa22109acac80bac76f451e7418976498458f0e1befff465"
 
   url "https://github.com/Kristijan/pane-switcher-for-rex/releases/download/v#{version}/Pane-Switcher-for-Rex-#{version}-arm64.zip"
   name "Pane Switcher for Rex"
