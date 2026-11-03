@@ -6,6 +6,16 @@ struct PickerShortcut {
     let modifiers: UInt32
     let display: String
     let value: String
+    let menuKeyEquivalent: String
+
+    var menuModifierMask: NSEvent.ModifierFlags {
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers & UInt32(controlKey) != 0 { flags.insert(.control) }
+        if modifiers & UInt32(optionKey) != 0 { flags.insert(.option) }
+        if modifiers & UInt32(shiftKey) != 0 { flags.insert(.shift) }
+        if modifiers & UInt32(cmdKey) != 0 { flags.insert(.command) }
+        return flags
+    }
 
     private static let codes: [String: UInt32] = [
             "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7,
@@ -46,6 +56,7 @@ struct PickerShortcut {
             + (flags & UInt32(shiftKey) != 0 ? "⇧" : "")
             + (flags & UInt32(cmdKey) != 0 ? "⌘" : "") + last.uppercased()
         self.value = Self.canonicalValue(key: last, modifiers: flags)
+        menuKeyEquivalent = last == "space" ? " " : last
     }
 
     init(event: NSEvent) throws {
@@ -86,6 +97,7 @@ final class RexHotKey {
     private let shortcut: PickerShortcut
     private let rexBundleID: String
     private let global: Bool
+    private var menuTracking = false
     private let pressed: () -> Void
     private let failed: (String) -> Void
 
@@ -100,7 +112,8 @@ final class RexHotKey {
             let owner = Unmanaged<RexHotKey>.fromOpaque(userData).takeUnretainedValue()
             MainActor.assumeIsolated {
                 // Recheck at delivery: the frontmost app may have changed since registration.
-                if owner.global || NSWorkspace.shared.frontmostApplication?.bundleIdentifier == owner.rexBundleID {
+                if !owner.menuTracking,
+                   owner.global || NSWorkspace.shared.frontmostApplication?.bundleIdentifier == owner.rexBundleID {
                     owner.pressed()
                 }
             }
@@ -136,7 +149,7 @@ final class RexHotKey {
     }
 
     private func update(active: Bool) {
-        let active = global || active
+        let active = !menuTracking && (global || active)
         // frontmostApplication can still describe the previous app during an activation notification.
         if !active, let hotKey {
             UnregisterEventHotKey(hotKey); self.hotKey = nil
@@ -148,6 +161,14 @@ final class RexHotKey {
                 failed("Cannot register \(shortcut.display) (macOS status \(status)). Choose another shortcut in Settings.")
             }
         }
+    }
+
+    /// Native menu tracking does not deliver Carbon hot-key events. Hand this one
+    /// registration to the menu temporarily, rather than registering a second shortcut.
+    func setMenuTracking(_ tracking: Bool) {
+        guard menuTracking != tracking else { return }
+        menuTracking = tracking
+        update(active: NSWorkspace.shared.frontmostApplication?.bundleIdentifier == rexBundleID)
     }
 
     func stop() {

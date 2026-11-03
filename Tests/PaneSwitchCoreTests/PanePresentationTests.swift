@@ -11,6 +11,20 @@ struct PanePresentationTests {
              blockID: "block", label: "Shell", title: "Terminal", command: "zsh", directory: directory)
     }
 
+    @Test func primaryPresentationKeepsMeaningfulNamesAndReplacesGenericShellWithCommand() {
+        func target(title: String, label: String, command: String) -> Pane {
+            Pane(host: RexHost(id: "local", label: "This Mac", server: nil),
+                 sessionID: "session", sessionLabel: "Work", windowID: "tab", windowLabel: "Tab",
+                 blockID: "block", label: label, title: title, command: command, directory: "/work")
+        }
+        #expect(target(title: "shell", label: "shell", command: "zsh").displayPrimaryText == "zsh")
+        #expect(target(title: "Build", label: "Task", command: "make").displayPrimaryText == "Build — Task — make")
+        #expect(target(title: "Build", label: "Build", command: "make").displayPrimaryText == "Build — make")
+        #expect(target(title: "zsh", label: "", command: "zsh").displayPrimaryText == "zsh")
+        #expect(target(title: "shell", label: "shell", command: "").displayPrimaryText == "shell")
+        #expect(target(title: "", label: "", command: "").displayPrimaryText == "block")
+    }
+
     @Test func rowContextOmitsHostAndLocationButKeepsSessionTabAndPath() {
         let servers: [String?] = [nil, "remote.example"]
         for server in servers {

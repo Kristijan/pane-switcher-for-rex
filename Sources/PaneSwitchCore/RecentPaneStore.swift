@@ -1,6 +1,6 @@
 import Foundation
 
-/// Successful picker selections, stored independently of the current pane inventory.
+/// Successful pane selections, stored independently of the current pane inventory.
 /// The owner records only after a switch succeeds and reports `loadError` to the user.
 public final class RecentPaneStore {
     private static let limit = 100

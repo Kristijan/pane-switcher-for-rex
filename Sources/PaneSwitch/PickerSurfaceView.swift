@@ -547,13 +547,7 @@ private final class PaneRowView: NSTableCellView {
     }
 
     func configure(_ pane: Pane, jumpIndex: Int?, highlighter: PaneSearch.Highlighter) {
-        var names = [pane.primaryText]
-        if !pane.label.isEmpty, pane.label != pane.primaryText { names.append(pane.label) }
-        if !pane.command.isEmpty {
-            names.removeAll { $0 == "shell" }
-            if !names.contains(pane.command) { names.append(pane.command) }
-        }
-        let primaryString = RexSymbolFont.shared.displayText(names.joined(separator: " — "))
+        let primaryString = RexSymbolFont.shared.displayText(pane.displayPrimaryText)
         primaryMatches = highlighter.ranges(in: primaryString)
         primaryText = highlighted(primaryString, size: 14, weight: .regular, ranges: primaryMatches)
         secondaryBasename = nil

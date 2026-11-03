@@ -5,7 +5,7 @@ import PaneSwitchCore
 final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
     private let backend: RexBackend
     private let settings: PickerSettings
-    private let recentStore: RecentPaneStore
+    private let switcher: PaneSwitcher
     private let surface: PickerSurfaceView
     private var layout: PickerLayout { surface.layout }
     private let openSettings: () -> Void
@@ -18,10 +18,10 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
     private var message: NSTextField { surface.message }
     private var empty: NSTextField { surface.empty }
     private var spinner: NSProgressIndicator { surface.spinner }
-    private var hosts: [String: RexHost] = [:]
-    private var hostStates: [String: PickerHostState] = [:]
-    private var unavailableHosts = Set<String>()
-    private var inventories: [String: [Pane]] = [:]
+    private var inventory = PaneDiscoverySnapshot()
+    private var hosts: [String: RexHost] { inventory.hosts }
+    private var hostStates: [String: PickerHostState] { inventory.hostStates }
+    private var inventories: [String: [Pane]] { inventory.inventories }
     private var index = PaneSearch.Index([])
     private var list = PaneGroupedList(rankedPanes: [])
     private var highlighter = PaneSearch.Highlighter(query: "")
@@ -38,21 +38,21 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
     private var clientID = ""
     private var rexApp: NSRunningApplication?
     private var returningTo: NSRunningApplication?
-    private var isDiscovering = false
+    private var isDiscovering: Bool { inventory.isDiscovering }
     private var isSwitching = false
     private var selection = PaneSelection()
     private var errorMessage: String?
-    private var warningMessage: String?
-    private var hostDiscoveryWarnings: [String] = []
+    private var warningMessage: String? { inventory.warning }
+    private var hostDiscoveryWarnings: [String] { inventory.hostDiscoveryWarnings }
     private var recentIDs: [String] = []
     private var recentWarningMessage: String?
     private var diagnostics = PickerDiagnostics()
 
-    init(backend: RexBackend, settings: PickerSettings, openSettings: @escaping () -> Void) {
+    init(backend: RexBackend, switcher: PaneSwitcher, settings: PickerSettings, openSettings: @escaping () -> Void) {
         self.backend = backend
         self.settings = settings
         self.surface = PickerSurfaceView(settings: settings)
-        self.recentStore = RecentPaneStore()
+        self.switcher = switcher
         self.openSettings = openSettings
         super.init()
         configurePanel()
@@ -69,14 +69,11 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         search.isEnabled = true
         selection.resetForQuery()
         errorMessage = nil
-        warningMessage = nil
-        recentIDs = recentStore.snapshot()
-        if let error = recentStore.loadError {
-            recentWarningMessage = "Could not load recent panes: \(error.localizedDescription)"
-        }
+        recentIDs = switcher.recentIDs
+        recentWarningMessage = switcher.recentWarning
         isSwitching = false
         message.stringValue = ""
-        startDiscovery(clearInventory: true)
+        startDiscovery()
         let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main
         if let visible = screen?.visibleFrame {
             // Discovery starts with an empty inventory; keep the shell stable as results arrive.
@@ -181,23 +178,15 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         }
     }
 
-    private func startDiscovery(clearInventory: Bool) {
+    private func startDiscovery() {
         discoveryTask?.cancel()
         discovery = UUID()
         let run = invocation
         let refresh = discovery
-        isDiscovering = true
-        if clearInventory {
-            hosts.removeAll()
-            search.setHosts([])
-            hostStates.removeAll()
-            unavailableHosts.removeAll()
-            inventories.removeAll()
-            surface.setHostStates(hostStates)
-            rebuildResults(resetViewport: true)
-        }
-        warningMessage = nil
-        hostDiscoveryWarnings.removeAll()
+        inventory = PaneDiscoverySnapshot()
+        search.setHosts([])
+        surface.setHostStates(hostStates)
+        rebuildResults(resetViewport: true)
         updateFooter()
         discoveryTask = Task { [weak self, backend] in
             for await event in backend.discover() {
@@ -205,55 +194,22 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
                 self.receive(event)
             }
             guard !Task.isCancelled, let self, self.invocation == run, self.discovery == refresh else { return }
-            self.isDiscovering = false
-            self.updateFooter()
+            self.receive(.finished)
         }
     }
 
     private func receive(_ event: DiscoveryEvent) {
+        inventory.receive(event)
         switch event {
-        case .hosts(let discovered):
-            let hostIDs = Set(discovered.map(\.id))
-            let removed = Set(hosts.keys).subtracting(hostIDs)
-            for id in removed {
-                hosts[id] = nil
-                hostStates[id] = nil
-                inventories[id] = nil
-                unavailableHosts.remove(id)
-            }
-            for host in discovered {
-                hosts[host.id] = host
-                if hostStates[host.id] == nil { hostStates[host.id] = .connecting }
-            }
+        case .hosts, .panes, .failed:
             surface.setHostStates(hostStates)
             updateHostSuggestions()
+            if case .panes(_, let panes) = event {
+                RexIconProvider.shared.preload(commands: panes.map(\.command))
+            }
             rebuildResults()
-        case .panes(let host, let panes):
-            let previouslyHadPanes = inventories[host.id]?.isEmpty == false
-            let sameHost = hosts[host.id] == host
-            hosts[host.id] = host
-            unavailableHosts.remove(host.id)
-            hostStates[host.id] = .ready
-            inventories[host.id] = panes
-            if !sameHost || previouslyHadPanes != (panes.isEmpty == false) { updateHostSuggestions() }
-            surface.setHostStates(hostStates)
-            RexIconProvider.shared.preload(commands: panes.map(\.command))
-            rebuildResults()
-        case .failed(let host, let reason):
-            let previouslyHadPanes = inventories[host.id]?.isEmpty == false
-            hosts[host.id] = host
-            unavailableHosts.insert(host.id)
-            hostStates[host.id] = .unavailable(reason)
-            inventories[host.id] = nil
-            if previouslyHadPanes { updateHostSuggestions() }
-            surface.setHostStates(hostStates)
-            rebuildResults()
-        case .warning(let warning):
-            warningMessage = warning
-        case .hostDiscoveryWarnings(let warnings):
-            hostDiscoveryWarnings = warnings
-        case .finished:
-            isDiscovering = false
+        case .warning, .hostDiscoveryWarnings, .finished:
+            break
         }
         updateFooter()
     }
@@ -417,7 +373,7 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         } else if let warningMessage {
             message.stringValue = warningMessage
             message.textColor = .secondaryLabelColor
-        } else if !unavailableHosts.isEmpty {
+        } else if hostStates.values.contains(where: { if case .unavailable = $0 { return true }; return false }) {
             message.stringValue = "Some hosts are unavailable."
             message.textColor = .secondaryLabelColor
         } else {
@@ -500,7 +456,7 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
     }
 
     @objc private func acceptSelection() {
-        guard !isSwitching, let paneIndex = list.paneIndex(forRow: table.selectedRow) else { return }
+        guard !isSwitching, let rexApp, let paneIndex = list.paneIndex(forRow: table.selectedRow) else { return }
         let pane = list.panes[paneIndex]
         let run = invocation
         let client = clientID
@@ -508,60 +464,24 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         isSwitching = true
         search.isEnabled = false
         updateFooter()
-        switchTask = Task { [weak self, backend] in
-            var activationDuration: Duration = .zero
-            var rpcTimings: RexSwitchTimings?
-            do {
-                if let app = self?.rexApp, !app.isActive {
-                    let activationStarted = started == nil ? nil : ContinuousClock.now
-                    defer {
-                        if let activationStarted { activationDuration = activationStarted.duration(to: .now) }
-                    }
-                    // Rex must be active before selecting its terminal first responder.
-                    NSApp.yieldActivation(to: app)
-                    guard app.activate(options: []) else { throw PickerError("Could not activate Rex.") }
-                    let deadline = ContinuousClock.now + .seconds(2)
-                    while !app.isActive {
-                        try Task.checkCancellation()
-                        guard !app.isTerminated, ContinuousClock.now < deadline else {
-                            throw PickerError("Rex did not become active.")
-                        }
-                        try await Task.sleep(for: .milliseconds(10))
-                    }
-                }
-                if started != nil {
-                    let measurement = await backend.measuredSwitchTo(pane, clientID: client)
-                    rpcTimings = measurement.timings
-                    try measurement.result.get()
-                } else {
-                    try await backend.switchTo(pane, clientID: client)
-                }
-                guard !Task.isCancelled, let self, self.invocation == run else { return }
-                if let started {
-                    self.diagnostics.recordSwitch(total: started.duration(to: .now),
-                                                  nativeActivation: activationDuration, rpc: rpcTimings)
-                }
-                // Persistence is independent of switching: failure must never repeat a mutation
-                // or reopen a picker after Rex has already selected the requested pane.
-                do {
-                    try self.recentStore.record(pane)
-                    self.recentWarningMessage = nil
-                } catch {
-                    self.recentWarningMessage = "Could not save recent panes: \(error.localizedDescription)"
-                }
+        switchTask = Task { [weak self, switcher] in
+            let outcome = await switcher.switchTo(pane, clientID: client, rexApp: rexApp, measured: started != nil)
+            guard !Task.isCancelled, let self, self.invocation == run else { return }
+            if let started {
+                self.diagnostics.recordSwitch(total: started.duration(to: .now),
+                                              nativeActivation: outcome.nativeActivation, rpc: outcome.rpc)
+            }
+            switch outcome.result {
+            case .success:
+                self.recentWarningMessage = outcome.recentWarning
                 self.close(restoreActivation: false)
-            } catch {
-                guard !Task.isCancelled, let self, self.invocation == run else { return }
-                if let started {
-                    self.diagnostics.recordSwitch(total: started.duration(to: .now),
-                                                  nativeActivation: activationDuration, rpc: rpcTimings)
-                }
+            case .failure(let error):
                 self.isSwitching = false
                 self.search.isEnabled = true
                 self.errorMessage = "Could not switch: \(error.localizedDescription) Refreshing inventory; choose an available pane."
                 self.selection.suspendAfterFailure()
                 self.table.deselectAll(nil)
-                self.startDiscovery(clearInventory: true)
+                self.startDiscovery()
                 // Do not reclaim application focus if another application became active meanwhile.
                 if NSWorkspace.shared.frontmostApplication?.processIdentifier == self.rexApp?.processIdentifier {
                     NSApp.activate(ignoringOtherApps: true)
