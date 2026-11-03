@@ -36,6 +36,8 @@ PR checks use a read-only token and no Apple signing/notarization secrets. Do no
 
 Keep tests deterministic and independent of personal host names, running Rex sessions, credentials, and user preferences. Cover behavior and failure modes rather than incidental UI wording or implementation details. Do not commit `.build`, credentials, exported certificates, notarization keys, or local environment files.
 
+For concurrent transport tests, hold fixture requests behind explicit release signals rather than fixed sleeps. The queued-deadline test releases its active request only after the queued request expires, so CI scheduling delays cannot accidentally send that request.
+
 ## Releases
 
 Public releases use a separate, protected, tag-based workflow; CI's ad-hoc app is not a production download. See [RELEASING.md](RELEASING.md) for the one-time Apple/GitHub setup and the release → review → publish → Homebrew cask PR sequence.

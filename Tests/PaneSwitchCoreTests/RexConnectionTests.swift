@@ -71,14 +71,14 @@ struct RexConnectionTests {
         case "$request" in
             *hold-request*)
                 : > "$directory/active"
-                /bin/sleep 0.4
+                while [ ! -f "$directory/release" ]; do /bin/sleep 0.01; done
                 ;;
         esac
         respond "{\\\"pid\\\":$$,\\\"count\\\":$count}"
         """#))
         let connection = fixture.connection()
         defer { connection.shutdown() }
-        let active = Task { try await connection.execute("hold-request", timeout: 2) }
+        let active = Task { try await connection.execute("hold-request", timeout: 8) }
         try await fixture.waitForFile("active")
         let cancelled = Task { try await connection.execute("cancelled-request") }
         cancelled.cancel()
@@ -88,6 +88,7 @@ struct RexConnectionTests {
         } catch is CancellationError {}
         let expired = Task { try await connection.execute("expired-request", timeout: 0.03) }
         #expect(isDisconnected(await expired.result))
+        try Data().write(to: fixture.directory.appendingPathComponent("release"))
         let first = try await active.value
         let second = try await connection.execute("next-request")
         #expect(first["pid"] as? Int == second["pid"] as? Int)

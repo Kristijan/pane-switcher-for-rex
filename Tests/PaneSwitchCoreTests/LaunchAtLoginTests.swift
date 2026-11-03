@@ -67,7 +67,7 @@ struct LaunchAtLoginTests {
                     "ProcessType": "Interactive"
                 ]
                 original["RunAtLoad"] = enabled
-                try writeAgent(original, to: plist, format: .binary)
+                _ = try writeAgent(original, to: plist, format: .binary)
                 #expect(try login.isEnabled() == (enabled == true))
                 try login.migrateLegacyExecutable()
                 var expected = original
@@ -86,7 +86,7 @@ struct LaunchAtLoginTests {
         try withTemporaryAgent { plist, executable, _ in
             let legacy = plist.deletingLastPathComponent().appendingPathComponent("Pane Switch.app/Contents/MacOS/PaneSwitch")
             let login = LaunchAtLogin(plistURL: plist, executableURL: executable, legacyExecutableURLs: [legacy])
-            try writeAgent([
+            _ = try writeAgent([
                 "Label": "com.kristijan.paneswitch",
                 "ProgramArguments": [legacy.path],
                 "RunAtLoad": true,
