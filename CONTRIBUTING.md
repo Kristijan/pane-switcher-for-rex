@@ -23,6 +23,8 @@ The AppKit interaction tests dispatch real local mouse events through the picker
 
 When exercising picker cancellation, interrupt an in-flight opening lookup with Settings or Setup, then request the picker again before the old lookup finishes. The cancelled invocation must neither present a picker nor clear the replacement lookup's ownership; repeated shortcut presses must not start concurrent replacement lookups.
 
+With the global shortcut enabled, open the picker from another app, enter a query and select a pane, then press the shortcut again. The existing picker must regain focus without changing the query or selected pane, and Escape must return to the app from which that picker session originally opened. Opening Settings must continue to dismiss the picker rather than reuse its session.
+
 ### Application data
 
 Settings (`config.json`) and recent-pane history (`recent-panes.json`) live in `~/Library/Application Support/Pane Switcher for Rex/`.

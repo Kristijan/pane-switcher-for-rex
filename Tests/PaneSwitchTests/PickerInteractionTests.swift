@@ -36,6 +36,25 @@ struct PickerInteractionTests {
         #expect(!suggestions.isVisible)
     }
 
+    @Test func focusingVisiblePickerPreservesQueryAndEditingSelection() throws {
+        let fixture = try PickerFixture()
+        defer { fixture.close() }
+        let search = try #require(fixture.search)
+        search.stringValue = "keep this query"
+        let editor = try #require(search.currentEditor() as? NSTextView)
+        editor.setSelectedRange(NSRange(location: 5, length: 4))
+
+        #expect(fixture.picker.focusIfVisible())
+        #expect(search.stringValue == "keep this query")
+        #expect(editor.selectedRange() == NSRange(location: 5, length: 4))
+        #expect(search.currentEditor() === editor)
+        #expect(fixture.panel.isVisible)
+
+        fixture.picker.dismissForSettings()
+        #expect(!fixture.picker.focusIfVisible())
+        #expect(!fixture.panel.isVisible)
+    }
+
     private func sendMouseDown(to window: NSWindow) throws {
         // Middle-click avoids NSTableView's synchronous left-button tracking loop while
         // exercising the application's real local event monitor and window dispatch.

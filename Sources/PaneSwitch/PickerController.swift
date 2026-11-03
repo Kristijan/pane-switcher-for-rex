@@ -93,6 +93,18 @@ final class PickerController: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         }
     }
 
+    /// Reuse the current session, including its query, selection, and return application.
+    @discardableResult
+    func focusIfVisible() -> Bool {
+        guard panel.isVisible else { return false }
+        NSApp.activate()
+        panel.makeKeyAndOrderFront(nil)
+        if search.isEnabled, panel.firstResponder !== search.currentEditor() {
+            panel.makeFirstResponder(search)
+        }
+        return true
+    }
+
     func dismiss() {
         close(restoreActivation: true)
     }

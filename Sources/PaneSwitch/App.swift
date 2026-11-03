@@ -183,6 +183,7 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         let requestedAt = ContinuousClock.now
         guard opening == nil else { return }
         guard let backend, let picker else { openSetup(); return }
+        if picker.focusIfVisible() { return }
         let frontmost = NSWorkspace.shared.frontmostApplication
         settingsController?.window?.orderOut(nil)
         setupController?.close()
