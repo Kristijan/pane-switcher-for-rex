@@ -131,7 +131,7 @@ class ReleaseOrchestration(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         fixture = source / "fixtures/release-command.py"
-        for name in ("security", "codesign", "ditto", "xcrun", "spctl"):
+        for name in ("security", "codesign", "ditto", "xcrun", "spctl", "sleep"):
             (self.bin / name).symlink_to(fixture.resolve())
         for name in ("build-app.sh", "smoke-app.sh"):
             (scripts / name).symlink_to(fixture.resolve())
@@ -182,6 +182,39 @@ class ReleaseOrchestration(unittest.TestCase):
                    ["security", "list-keychains", "-d", "user", "-s"]]
         self.assertEqual(updates, [[*self.original, state["created"]], self.original])
         self.assertEqual(len(list((self.root / "dist/1.0.0").iterdir())), 3)
+
+    def test_transient_stapler_failures_recover_without_resigning_or_resubmitting(self):
+        result = self.release(RELEASE_FIXTURE_STAPLER_STAGE="all")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = self.assert_cleaned()
+        self.assertEqual(state["stapler_attempts"], {"staple": 2, "validate": 2, "archive-validate": 2})
+        self.assertEqual(sum(call[:3] == ["xcrun", "notarytool", "submit"] for call in state["calls"]), 1)
+        self.assertEqual(sum(call[:2] == ["codesign", "--force"] for call in state["calls"]), 1)
+        self.assertEqual(len(list((self.root / "dist/1.0.0").iterdir())), 3)
+
+    def test_stapler_retry_exhaustion_preserves_error_and_cleans_credentials(self):
+        result = self.release(RELEASE_FIXTURE_STAPLER_STAGE="validate", RELEASE_FIXTURE_STAPLER_FAILURES="99")
+        self.assertEqual(result.returncode, 68)
+        state = self.assert_cleaned()
+        self.assertEqual(state["stapler_attempts"], {"staple": 1, "validate": 4})
+        self.assertEqual([call[1:] for call in state["calls"] if call[0] == "sleep"], [["10"], ["20"], ["40"]])
+        self.assertFalse((self.root / "dist").exists())
+
+    def test_nontransient_stapler_failure_is_not_retried(self):
+        result = self.release(RELEASE_FIXTURE_STAPLER_STAGE="staple",
+                              RELEASE_FIXTURE_STAPLER_MESSAGE="The ticket is invalid.")
+        self.assertEqual(result.returncode, 68)
+        state = self.assert_cleaned()
+        self.assertEqual(state["stapler_attempts"], {"staple": 1})
+        self.assertFalse(any(call[0] == "sleep" for call in state["calls"]))
+        self.assertFalse((self.root / "dist").exists())
+
+    def test_rejected_notarization_never_staples_or_produces_artifacts(self):
+        result = self.release(RELEASE_FIXTURE_NOTARY_STATUS="Invalid")
+        self.assertNotEqual(result.returncode, 0)
+        state = self.assert_cleaned()
+        self.assertNotIn("stapler_attempts", state)
+        self.assertFalse((self.root / "dist").exists())
 
     def test_empty_original_search_list_is_restored(self):
         self.original = []

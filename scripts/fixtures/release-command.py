@@ -106,9 +106,22 @@ elif name == "xcrun":
     if args[:2] == ["notarytool", "submit"]:
         if pathlib.Path(args[args.index("--key") + 1]).read_text() != "fixture private key":
             fail("missing fixture notary key")
-        print(json.dumps({"id": "fixture", "status": "Accepted"}))
-    elif args[0] != "stapler":
+        print(json.dumps({"id": "fixture", "status": os.environ.get("RELEASE_FIXTURE_NOTARY_STATUS", "Accepted")}))
+    elif args[0] == "stapler":
+        operation = args[1]
+        if operation == "validate" and pathlib.Path(args[2]).name != "fixture.app":
+            operation = "archive-validate"
+        attempts = state.setdefault("stapler_attempts", {})
+        attempts[operation] = attempts.get(operation, 0) + 1
+        selected = os.environ.get("RELEASE_FIXTURE_STAPLER_STAGE")
+        if selected in (operation, "all") and attempts[operation] <= int(os.environ.get("RELEASE_FIXTURE_STAPLER_FAILURES", "1")):
+            fail(os.environ.get("RELEASE_FIXTURE_STAPLER_MESSAGE",
+                                'Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost."'),
+                 int(os.environ.get("RELEASE_FIXTURE_STAPLER_CODE", "68")))
+    else:
         fail("unexpected xcrun command")
+elif name == "sleep":
+    pass
 elif name == "spctl":
     if not state.get("signed"):
         fail("bundle is not signed")

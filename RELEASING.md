@@ -114,6 +114,8 @@ Selecting `main` for that dispatch is intentionally rejected. The workflow never
 ## Failures and safe retries
 
 - Missing/invalid Apple credentials fail explicitly; there is no unsigned production fallback.
+- The script prints `Waiting for Apple notarization...` before the blocking submission and reports Apple's submission ID and status when it completes. Only an **Accepted** result proceeds to stapling.
+- Stapling and both ticket validations (before and after ZIP extraction) retry the reported transient CloudKit connection-loss failure: stapler exit **68** with `NSURLErrorDomain Code=-1005`. Each operation gets at most **four attempts**, waiting **10, 20, then 40 seconds** between attempts. Every attempt and retry delay is logged. Other failures stop immediately; exhausted retries preserve the final error and run credential/keychain cleanup. These retries do not rebuild, re-sign, or resubmit for notarization.
 - A search-list restoration failure is reported and fails an otherwise successful command; an existing release failure/cancellation keeps its original exit status. Temporary signing/notarization credentials are still removed. Only the protected `user-keychains.txt` snapshot is retained at the printed recovery path. In the same user session, inspect that snapshot and restore it with:
 
   ```sh
