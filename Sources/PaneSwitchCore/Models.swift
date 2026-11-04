@@ -26,6 +26,17 @@ public struct Pane: Codable, Hashable, Sendable, Identifiable {
         let name = title.isEmpty ? label : title
         return name.isEmpty ? (command.isEmpty ? blockID : command) : name
     }
+    /// Primary row content shared by the picker and native pane menus.
+    public var displayPrimaryText: String {
+        let primary = primaryText
+        var names = [primary]
+        if !label.isEmpty, label != primary { names.append(label) }
+        if !command.isEmpty {
+            names.removeAll { $0 == "shell" }
+            if !names.contains(command) { names.append(command) }
+        }
+        return names.joined(separator: " — ")
+    }
     public var secondaryText: String {
         [host.label, sessionLabel, windowLabel, directory].filter { !$0.isEmpty }.joined(separator: " · ")
     }

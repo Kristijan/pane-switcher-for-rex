@@ -23,6 +23,8 @@ On the development host, the incomplete, root-owned `MacOSX12.3.sdk` lacked `SDK
 
 To exercise the UI, quit any installed copy first, then open the development bundle. All copies intentionally share the same bundle ID and preferences. Setup appears on a fresh installation; existing configurations are retained. For UI changes, exercise the real picker and Settings, not only the core tests. In particular, check keyboard focus, first-launch setup, error recovery, cancellation, and light/dark appearance.
 
+Settings update status uses green for up to date, amber/yellow for an available update, red for a failed check, and neutral grey with a spinner while checking. Preserve the text, status icons, and accessibility descriptions, and verify the tinted pill and darker indicator in both light and dark appearance.
+
 The suite does not require a running Rex instance. Live picker tests do require Rex and its local server. macOS privacy permissions used by external test automation are not application requirements.
 
 For startup checks, distinguish no running Rex application from several running copies with none focused. The former should instruct the user to open Rex; the latter should request that they focus the intended copy. Test the no-Rex case in an isolated session rather than terminating a developer's active Rex session.
@@ -34,6 +36,16 @@ The AppKit interaction tests dispatch real local mouse events through the picker
 When exercising picker cancellation, interrupt an in-flight opening lookup with Settings or Setup, then request the picker again before the old lookup finishes. The cancelled invocation must neither present a picker nor clear the replacement lookup's ownership; repeated shortcut presses must not start concurrent replacement lookups.
 
 With the global shortcut enabled, open the picker from another app, enter a query and select a pane, then press the shortcut again. The existing picker must regain focus without changing the query or selected pane, and Escape must return to the app from which that picker session originally opened. Opening Settings must continue to dismiss the picker rather than reuse its session.
+
+### Menu-bar pane switching
+
+The root menu starts with `Panes`, followed by `Open Pane Switcher` with the configured native shortcut, then Settings and Quit.
+
+The `Panes` submenu lists every available pane directly, grouped under non-clickable host headings with separators between groups. Only hosts with available panes appear; empty, connecting, and unavailable hosts are omitted. Pane titles match the picker. Browsing uses stable host/session/tab/pane order rather than recent-history order. Duplicate titles gain session/tab context, then directory context only where needed; full context remains available in tooltips. Pane icons follow the existing setting.
+
+The menu and picker subscribe to one application-owned `RexBackend`. Opening either surface must reuse its warm inventory and persistent workers, without a new host lookup or connection pool. Freeze the entire menu hierarchy when the root opens; live changes become visible on the next opening. Capture the intended Rex application at that same point, revalidate the exact pane on selection, and share activation, switching, and recent-history handling with the picker.
+
+For native UI verification, compare the menu with an unfiltered picker, select both local and remote panes, and confirm that Rex receives focus without showing the picker. Check frozen snapshots, reopen freshness, stale-selection failures without replacement or mutation retries, and unchanged worker identities across repeated openings. Verify the configured shortcut's native right-hand column and its existing global/Rex-only scope both inside and outside menu tracking; Settings and Quit must retain standard keyboard behavior.
 
 ### Search behavior
 

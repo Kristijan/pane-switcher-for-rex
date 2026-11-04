@@ -893,15 +893,15 @@ private final class SettingsUpdatePill: NSView {
         case .upToDate:
             title = "Up to date"
             explanation = "No newer published release was found on GitHub."
-            tint = .systemGray
-            indicator.ink = .darkGray
+            tint = .systemGreen
+            indicator.ink = NSColor(calibratedRed: 0.08, green: 0.40, blue: 0.18, alpha: 1)
             indicator.isFailure = false
             checking = false
         case let .updateAvailable(version):
             title = "Update available"
             explanation = "Version \(version) is available on GitHub. Updates are installed manually. Check website for upgrade instructions"
-            tint = .systemGreen
-            indicator.ink = NSColor(calibratedRed: 0.08, green: 0.40, blue: 0.18, alpha: 1)
+            tint = .systemYellow
+            indicator.ink = NSColor(calibratedRed: 0.48, green: 0.30, blue: 0.02, alpha: 1)
             indicator.isFailure = false
             checking = false
         case let .failure(message):

@@ -116,7 +116,8 @@ private struct PickerFixture {
             // These interaction tests need no worker or live Rex instance.
             backend.shutdown()
         }
-        picker = PickerController(backend: backend, settings: PickerSettings(), openSettings: {})
+        picker = PickerController(backend: backend, switcher: PaneSwitcher(backend: backend),
+                                  settings: PickerSettings(), openSettings: {})
         picker.show(clientID: "test", rexApp: NSRunningApplication.current, returningTo: nil)
         panel = try #require(NSApp.windows.first { $0.isVisible && $0.title == "Switch Rex Pane" })
     }

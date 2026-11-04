@@ -29,6 +29,8 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     private var backend: RexBackend?
     private var backendExecutable: URL?
     private var picker: PickerController?
+    private var switcher: PaneSwitcher?
+    private var paneMenu: PaneMenuController?
     private var hotKey: RexHotKey?
     private var statusItem: NSStatusItem?
     private var settingsController: SettingsController?
@@ -112,7 +114,10 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         }
         backend.start()
         settings = value
-        picker = PickerController(backend: backend, settings: value, openSettings: { [weak self] in self?.openSettings() })
+        let switcher = PaneSwitcher(backend: backend)
+        self.switcher = switcher
+        picker = PickerController(backend: backend, switcher: switcher, settings: value,
+                                  openSettings: { [weak self] in self?.openSettings() })
         hotKey = RexHotKey(shortcut: shortcut, rexBundleID: rexBundleID, global: value.globalShortcut,
                            pressed: { [weak self] in self?.showPicker() },
                            failed: { [weak self] in self?.openSetup(message: $0) })
@@ -136,13 +141,24 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatusItem() {
         if let statusItem { NSStatusBar.system.removeStatusItem(statusItem); self.statusItem = nil }
+        paneMenu = nil
         guard settings.showMenuBarIcon || backend == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "rectangle.split.2x2", accessibilityDescription: "Pane Switcher for Rex")
-        let menu = NSMenu()
+        let menu = ShortcutDisplayMenu()
         let shortcut = try? PickerShortcut(settings.shortcut)
-        let show = NSMenuItem(title: "Switch Pane…  \(shortcut?.display ?? "")", action: #selector(showPicker), keyEquivalent: "")
-        show.target = self; menu.addItem(show)
+        menu.pickerShortcut = shortcut
+        let show = NSMenuItem(title: "Open Pane Switcher", action: #selector(showPickerFromMenu(_:)),
+                              keyEquivalent: shortcut?.menuKeyEquivalent ?? "")
+        show.keyEquivalentModifierMask = shortcut?.menuModifierMask ?? []
+        show.target = self
+        if let backend {
+            paneMenu = PaneMenuController(backend: backend, settings: settings, menu: menu,
+                pickerItem: show, trackingChanged: { [weak self] tracking in self?.hotKey?.setMenuTracking(tracking) },
+                captureTarget: { [weak self] in self?.captureRexTarget() ?? RexApplicationTarget(frontmost: nil, running: []) },
+                select: { [weak self] pane, target in self?.switchFromMenu(pane, target: target) })
+        }
+        menu.addItem(show)
         let preferences = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         preferences.target = self; menu.addItem(preferences)
         menu.addItem(.separator())
@@ -179,23 +195,24 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         opening = nil
     }
 
+    @objc private func showPickerFromMenu(_ sender: NSMenuItem) {
+        if let event = NSApp.currentEvent,
+           (statusItem?.menu as? ShortcutDisplayMenu)?.pickerShortcut?.matchesMenuEvent(event) == true,
+           !settings.globalShortcut,
+           NSWorkspace.shared.frontmostApplication?.bundleIdentifier != rexBundleID { return }
+        showPicker()
+    }
+
     @objc private func showPicker() {
         let requestedAt = ContinuousClock.now
         guard opening == nil else { return }
+        statusItem?.menu?.cancelTracking()
         guard let backend, let picker else { openSetup(); return }
         if picker.focusIfVisible() { return }
         let frontmost = NSWorkspace.shared.frontmostApplication
         settingsController?.window?.orderOut(nil)
         setupController?.close()
-        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: rexBundleID).filter { !$0.isTerminated }
-        guard !apps.isEmpty else {
-            report("Rex isn’t running. Open Rex, then press the shortcut again.")
-            return
-        }
-        let app: NSRunningApplication
-        if let frontmost, frontmost.bundleIdentifier == rexBundleID { app = frontmost }
-        else if apps.count == 1 { app = apps[0] }
-        else { report("Focus the Rex app you want to switch in, then press the shortcut."); return }
+        let target = captureRexTarget(frontmost: frontmost)
         let run = UUID()
         openingInvocation = run
         opening = Task { [weak self] in
@@ -203,17 +220,44 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
                 if self?.openingInvocation == run { self?.opening = nil }
             }
             do {
-                let clients = try await backend.appClients()
+                let client = try await target.client(in: backend)
                 guard !Task.isCancelled, let self, self.openingInvocation == run else { return }
-                let matching = clients.filter { $0.pid == app.processIdentifier }
-                guard matching.count == 1, let client = matching.first else {
-                    throw PickerError("Cannot identify this Rex app's local client. Keep Rex and its local server running.")
-                }
-                guard !Task.isCancelled, !app.isTerminated else { return }
-                picker.show(clientID: client.id, rexApp: app, returningTo: frontmost, requestedAt: requestedAt)
+                picker.show(clientID: client.id, rexApp: client.application, returningTo: frontmost, requestedAt: requestedAt)
             } catch {
                 if !Task.isCancelled, let self, self.openingInvocation == run {
                     self.report(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func captureRexTarget(frontmost: NSRunningApplication? = NSWorkspace.shared.frontmostApplication) -> RexApplicationTarget {
+        RexApplicationTarget(frontmost: frontmost,
+            running: NSRunningApplication.runningApplications(withBundleIdentifier: rexBundleID))
+    }
+
+    private func switchFromMenu(_ pane: Pane, target: RexApplicationTarget) {
+        guard opening == nil, let backend, let switcher else { return }
+        picker?.dismissForSettings()
+        settingsController?.window?.orderOut(nil)
+        setupController?.close()
+        let run = UUID()
+        openingInvocation = run
+        opening = Task { [weak self] in
+            defer {
+                if self?.openingInvocation == run { self?.opening = nil }
+            }
+            do {
+                let client = try await target.client(in: backend)
+                try Task.checkCancellation()
+                let outcome = await switcher.switchTo(pane, clientID: client.id, rexApp: client.application,
+                                                      measured: false)
+                guard !Task.isCancelled, let self, self.openingInvocation == run else { return }
+                try outcome.result.get()
+                if let warning = outcome.recentWarning { self.report(warning) }
+            } catch {
+                if !Task.isCancelled, let self, self.openingInvocation == run {
+                    self.report("Could not switch: \(error.localizedDescription)")
                 }
             }
         }
