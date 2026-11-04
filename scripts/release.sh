@@ -98,14 +98,38 @@ if [[ "$DETAILS" != *"Authority=$IDENTITY"* || "$DETAILS" != *"TeamIdentifier=$A
   exit 1
 fi
 "$ROOT/scripts/smoke-app.sh" "$APP"
+# Retry only Apple's reported transient ticket-delivery connection loss, never
+# notarization submission or unrelated stapler failures.
+run_stapler() {
+  local action="$1" app="$2" attempt=1 delay=10 result
+  while true; do
+    printf 'Stapler %s (attempt %s/4): %s\n' "$action" "$attempt" "$app"
+    if xcrun stapler "$action" "$app" > "$TEMP/stapler.log" 2>&1; then
+      cat "$TEMP/stapler.log"
+      return 0
+    else
+      result=$?
+    fi
+    cat "$TEMP/stapler.log" >&2
+    if [[ "$result" != 68 || "$attempt" -ge 4 ]] \
+      || ! grep -Fq 'NSURLErrorDomain Code=-1005' "$TEMP/stapler.log"; then
+      return "$result"
+    fi
+    printf 'Apple ticket-delivery connection lost; retrying stapler %s in %s seconds...\n' "$action" "$delay" >&2
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
+}
 # Submit a temporary ZIP; only the final ZIP made AFTER stapling is distributed.
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$TEMP/notarization.zip"
+printf 'Waiting for Apple notarization...\n'
 xcrun notarytool submit "$TEMP/notarization.zip" --key "$TEMP/notary-key.p8" \
   --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" --wait \
   --output-format json > "$TEMP/notarization.json"
 python3 -c 'import json,sys; result=json.load(open(sys.argv[1])); print("Notarization:", result.get("id"), result.get("status")); sys.exit(0 if result.get("status") == "Accepted" else 1)' "$TEMP/notarization.json"
-xcrun stapler staple "$APP"
-xcrun stapler validate "$APP"
+run_stapler staple "$APP"
+run_stapler validate "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 spctl --assess --type execute --verbose=2 "$APP"
 mkdir -p "$OUTPUT"
@@ -115,7 +139,7 @@ ditto -c -k --sequesterRsrc --keepParent "$APP" "$TEMP/$ARCHIVE"
 mkdir "$TEMP/extracted"
 ditto -x -k "$TEMP/$ARCHIVE" "$TEMP/extracted"
 "$ROOT/scripts/smoke-app.sh" "$TEMP/extracted/Pane Switcher for Rex.app"
-xcrun stapler validate "$TEMP/extracted/Pane Switcher for Rex.app"
+run_stapler validate "$TEMP/extracted/Pane Switcher for Rex.app"
 python3 "$ROOT/scripts/release-support.py" cask --version "$VERSION" \
   --zip "$TEMP/$ARCHIVE" --output "$TEMP/pane-switcher-for-rex.rb"
 ruby -c "$TEMP/pane-switcher-for-rex.rb"

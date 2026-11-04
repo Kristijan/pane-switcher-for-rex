@@ -1,6 +1,6 @@
 # Releasing
 
-This repository contains the application and hosts its signed release assets. The separate [Homebrew tap](https://github.com/Kristijan/homebrew-pane-switcher-for-rex) contains `Casks/pane-switcher-for-rex.rb`. The release workflow builds an Apple Silicon app, signs it with Developer ID, notarizes it, and creates a **draft GitHub release here** plus a **draft cask-update PR in the tap**. A maintainer reviews and publishes the release before merging the tap PR.
+This repository contains the application and hosts its signed release assets. The separate [Homebrew tap](https://github.com/Kristijan/homebrew-pane-switcher-for-rex) contains `Casks/pane-switcher-for-rex.rb`. The release workflow builds an Apple Silicon app, signs it with Developer ID, notarizes it, and creates a **draft GitHub release here** plus a **ready-for-review cask-update PR in the tap**. A maintainer reviews and publishes the release before merging the tap PR. The cask PR is not auto-merged; being ready for review does not make unpublished assets downloadable.
 
 No production release can be created until Apple signing and notarization credentials are configured. Development/PR builds are ad-hoc signed and are not public release artifacts.
 
@@ -100,7 +100,7 @@ References: [GitHub environment protection](https://docs.github.com/en/actions/h
 
 5. Inspect the Actions result and draft release. Download the actual ZIP and verify its checksum. Test the signed app on an Apple Silicon Mac, including first launch, setup, local/remote pane activation, About, and quitting. The workflow uses GitHub's automatically generated release notes, including merged pull requests and contributor attribution. Review/edit these notes before publication; generation does not publish the release.
 6. **Publish the reviewed GitHub draft release.** Draft assets cannot be downloaded publicly by Homebrew.
-7. Review the generated **draft cask PR in `Kristijan/homebrew-pane-switcher-for-rex`**. Check the version, release URL, and actual ZIP checksum, then mark it ready and merge it **only after the matching release is public**. Subsequent releases update the existing cask. If the tap has CI, require its checks to pass; the minimal tap does not run this application's CI.
+7. Review the generated **cask PR in `Kristijan/homebrew-pane-switcher-for-rex`**, which opens ready for review rather than as a draft. Check the version, release URL, and actual ZIP checksum, and merge it **only after the matching release is public**. Subsequent releases update the existing cask. If the tap has CI, require its checks to pass; the minimal tap does not run this application's CI.
 8. Verify a real Homebrew install/upgrade and a direct download. Installation is not available until both the release assets in the app repository and the cask in the tap are public.
 
 A manual retry may use an existing tag, selected as both the workflow ref and input:
@@ -114,6 +114,8 @@ Selecting `main` for that dispatch is intentionally rejected. The workflow never
 ## Failures and safe retries
 
 - Missing/invalid Apple credentials fail explicitly; there is no unsigned production fallback.
+- The script prints `Waiting for Apple notarization...` before the blocking submission and reports Apple's submission ID and status when it completes. Only an **Accepted** result proceeds to stapling.
+- Stapling and both ticket validations (before and after ZIP extraction) retry the reported transient CloudKit connection-loss failure: stapler exit **68** with `NSURLErrorDomain Code=-1005`. Each operation gets at most **four attempts**, waiting **10, 20, then 40 seconds** between attempts. Every attempt and retry delay is logged. Other failures stop immediately; exhausted retries preserve the final error and run credential/keychain cleanup. These retries do not rebuild, re-sign, or resubmit for notarization.
 - A search-list restoration failure is reported and fails an otherwise successful command; an existing release failure/cancellation keeps its original exit status. Temporary signing/notarization credentials are still removed. Only the protected `user-keychains.txt` snapshot is retained at the printed recovery path. In the same user session, inspect that snapshot and restore it with:
 
   ```sh

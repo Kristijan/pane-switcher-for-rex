@@ -37,7 +37,7 @@ brew tap kristijan/pane-switcher-for-rex
 brew install --cask kristijan/pane-switcher-for-rex/pane-switcher-for-rex
 ```
 
-To upgrade, quit Pane Switcher for Rex, then run:
+To upgrade:
 
 ```sh
 brew update

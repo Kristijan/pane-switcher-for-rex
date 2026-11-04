@@ -70,6 +70,8 @@ Open a PR against `main`. CI runs on every PR, including changes confined to rel
 
 PR checks use a read-only token and no Apple signing/notarization secrets. Do not use `pull_request_target` to run contributor code with privileged credentials. Changes to release scripts and workflows require especially careful review.
 
+Actions are pinned to full commit SHAs. The current checkout/upload/download actions use Node.js 24 on GitHub-hosted runners. Preserve named, ZIP-backed artifact handoff and fail-closed download digest verification when updating them. See the upstream [checkout](https://github.com/actions/checkout/releases/tag/v7.0.1), [upload-artifact](https://github.com/actions/upload-artifact/releases/tag/v7.0.2), and [download-artifact](https://github.com/actions/download-artifact/releases/tag/v8.0.2) release notes before changing their pins.
+
 Keep tests deterministic and independent of personal host names, running Rex sessions, credentials, and user preferences. Cover behavior and failure modes rather than incidental UI wording or implementation details. Do not commit `.build`, credentials, exported certificates, notarization keys, or local environment files.
 
 For concurrent transport tests, hold fixture requests behind explicit release signals rather than fixed sleeps. The queued-deadline test releases its active request only after the queued request expires, so CI scheduling delays cannot accidentally send that request.
@@ -82,6 +84,6 @@ Warm-cache discovery refresh failures retain pending listing/session work and re
 
 Public releases use a separate, protected, tag-based workflow; CI's ad-hoc app is not a production download. See [RELEASING.md](RELEASING.md) for the one-time Apple/GitHub setup and the release → review → publish → Homebrew cask PR sequence.
 
-The application repository builds and hosts release artifacts; `Kristijan/homebrew-pane-switcher-for-rex` owns the committed cask and receives draft update PRs. Cask-publication tests run the real release script against an isolated, stateful GitHub service fixture, checking that reviewed branches and concurrent cask edits are never overwritten and invalid artifacts cause no remote mutations. They do not use GitHub credentials or make network requests.
+The application repository builds and hosts release artifacts; `Kristijan/homebrew-pane-switcher-for-rex` owns the committed cask and receives ready-for-review update PRs. Publish the app release before merging its cask PR; no automatic merge is configured. Cask-publication tests run the real release script against an isolated, stateful GitHub service fixture, checking that reviewed branches and concurrent cask edits are never overwritten and invalid artifacts cause no remote mutations. They do not use GitHub credentials or make network requests.
 
 Update `Resources/Info.plist` for a new stable version. The `vMAJOR.MINOR.PATCH` release tag must exactly match `CFBundleShortVersionString`. No Intel or universal-binary release is supported. The app checks GitHub Releases when Settings opens but never installs updates. Update-check tests use isolated HTTP fixtures, not the live API.
