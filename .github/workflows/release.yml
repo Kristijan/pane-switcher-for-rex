@@ -96,7 +96,7 @@ jobs:
             --repo "$GH_REPO" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes
 
   cask:
-    name: Open draft cask update PR
+    name: Open cask update PR
     needs: [package, draft]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -115,7 +115,7 @@ jobs:
         with:
           name: production-distribution
           path: distribution
-      - name: Create draft cask update PR in the Homebrew tap
+      - name: Create cask update PR in the Homebrew tap
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: scripts/create-cask-pr.sh "$RELEASE_TAG" "$GITHUB_WORKSPACE/distribution"

@@ -39,8 +39,8 @@ cat > "$TEMP/body.txt" <<EOF
 Updates the dedicated Homebrew tap to $VERSION using the SHA-256 of the signed, notarized, stapled release ZIP.
 
 - Review the draft release assets and signing/notarization results.
-- Publish https://github.com/$APP_REPOSITORY/releases/tag/$TAG before marking this PR ready and merging it: draft assets are not publicly downloadable.
+- Publish https://github.com/$APP_REPOSITORY/releases/tag/$TAG before merging this PR: draft assets are not publicly downloadable. Ready for review does not mean ready to merge.
 - Review the cask's version, download URL, and checksum, and require any checks configured in this tap repository to pass.
 EOF
-gh pr create --repo "$TAP_REPOSITORY" --base "$BASE" --head "$BRANCH" --draft \
+gh pr create --repo "$TAP_REPOSITORY" --base "$BASE" --head "$BRANCH" \
   --title "Update Homebrew cask to $VERSION" --body-file "$TEMP/body.txt"

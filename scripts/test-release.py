@@ -389,7 +389,7 @@ class CaskPublication(unittest.TestCase):
     def remote(self):
         return json.loads(self.state.read_text())
 
-    def test_initial_publication_creates_only_a_draft_tap_update(self):
+    def test_initial_publication_creates_only_a_reviewable_tap_update(self):
         before = self.seed()
         result = self.publish()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -404,7 +404,7 @@ class CaskPublication(unittest.TestCase):
                          ["commits"]["base-commit"]["README.md"])
         self.assertEqual(len(tap["pull_requests"]), 1)
         pr = tap["pull_requests"][0]
-        self.assertTrue(pr["draft"])
+        self.assertFalse(pr["draft"])
         self.assertEqual((pr["base"], pr["head"]), ("trunk", self.BRANCH))
         self.assertIn("https://github.com/Kristijan/pane-switcher-for-rex/releases/tag/v1.0.0",
                       pr["body"])
