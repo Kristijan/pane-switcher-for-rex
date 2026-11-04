@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Consumer tests for release inputs, keychain lifecycle, and Homebrew artifacts."""
+"""Consumer tests for release inputs, signing lifecycle, artifacts, and tap publication."""
 
 import hashlib
 import json
@@ -255,6 +255,205 @@ class ReleaseOrchestration(unittest.TestCase):
         self.assertIn("recovery snapshot retained", result.stderr)
         self.assertFalse(any(path.name in ("certificate.p12", "notary-key.p8", "release.keychain-db")
                              for path in self.temp.rglob("*")))
+
+
+class CaskPublication(unittest.TestCase):
+    APP_REPOSITORY = "Kristijan/pane-switcher-for-rex"
+    TAP_REPOSITORY = "Kristijan/homebrew-pane-switcher-for-rex"
+    CASK_PATH = "Casks/pane-switcher-for-rex.rb"
+    BRANCH = "cask/v1.0.0"
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="cask publication ")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = pathlib.Path(self.temporary.name)
+        source = pathlib.Path(__file__).parent
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        for name in ("create-cask-pr.sh", "release-support.py"):
+            shutil.copy2(source / name, scripts / name)
+        resources = self.root / "Resources"
+        resources.mkdir()
+        (resources / "Info.plist").write_bytes(plistlib.dumps({
+            "CFBundleShortVersionString": "1.0.0",
+            "CFBundleIdentifier": "com.kristijan.paneswitch",
+            "CFBundleExecutable": "PaneSwitch",
+            "LSMinimumSystemVersion": "15.0",
+        }))
+        self.artifacts = self.root / "release artifacts"
+        self.artifacts.mkdir()
+        self.archive = self.artifacts / "Pane-Switcher-for-Rex-1.0.0-arm64.zip"
+        with zipfile.ZipFile(self.archive, "w") as archive:
+            archive.writestr("Pane Switcher for Rex.app/executable", "signed release fixture")
+        self.checksum = self.archive.with_suffix(".zip.sha256")
+        self.checksum.write_text(hashlib.sha256(self.archive.read_bytes()).hexdigest()
+                                 + "  " + self.archive.name + "\n")
+        self.manifest = self.artifacts / "pane-switcher-for-rex.rb"
+        generated = subprocess.run(
+            [sys.executable, str(scripts / "release-support.py"), "cask", "--version", "1.0.0",
+             "--zip", str(self.archive), "--output", str(self.manifest)],
+            text=True, capture_output=True,
+        )
+        self.assertEqual(generated.returncode, 0, generated.stderr)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        (self.bin / "gh").symlink_to((source / "fixtures/cask-github.py").resolve())
+        self.temp = self.root / "temporary files"
+        self.temp.mkdir()
+        self.state = self.root / "github.json"
+        self.environment = {
+            **os.environ,
+            "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
+            "TMPDIR": str(self.temp),
+            "GH_TOKEN": "fixture tap-only token",
+            "CASK_FIXTURE_STATE": str(self.state),
+        }
+        self.seed()
+
+    def seed(self, existing=False, collision=False):
+        files = {"README.md": self.blob("Dedicated public Homebrew tap\n")}
+        if existing:
+            files[self.CASK_PATH] = self.blob("previous published cask\n")
+        tap = {
+            "default_branch": "trunk", "branches": {"trunk": "base-commit"},
+            "commits": {"base-commit": files}, "pull_requests": [],
+        }
+        if collision:
+            reviewed = {**files, self.CASK_PATH: self.blob("already reviewed cask\n")}
+            tap["commits"]["reviewed-commit"] = reviewed
+            tap["branches"][self.BRANCH] = "reviewed-commit"
+            tap["pull_requests"].append({
+                "base": "trunk", "head": self.BRANCH, "draft": False,
+                "title": "Reviewed work", "body": "Do not replace",
+            })
+        state = {
+            "write_attempts": 0, "writable_repository": self.TAP_REPOSITORY,
+            "repositories": {
+                self.TAP_REPOSITORY: tap,
+                self.APP_REPOSITORY: {
+                    "default_branch": "main", "branches": {"main": "app-commit"},
+                    "commits": {"app-commit": {"app.swift": self.blob("app source\n")}},
+                    "pull_requests": [],
+                },
+            },
+        }
+        self.state.write_text(json.dumps(state))
+        return state
+
+    @staticmethod
+    def blob(content):
+        return {"content": content, "sha": hashlib.sha1(content.encode()).hexdigest()}
+
+    def publish(self, tag="v1.0.0", **environment):
+        result = subprocess.run(
+            ["/bin/bash", str(self.root / "scripts/create-cask-pr.sh"), tag, str(self.artifacts)],
+            env={**self.environment, **environment}, cwd=self.root,
+            text=True, capture_output=True, timeout=30,
+        )
+        self.assertEqual(list(self.temp.iterdir()), [], "publication left temporary files behind")
+        return result
+
+    def remote(self):
+        return json.loads(self.state.read_text())
+
+    def test_initial_publication_creates_only_a_draft_tap_update(self):
+        before = self.seed()
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = self.remote()
+        self.assertEqual(state["repositories"][self.APP_REPOSITORY],
+                         before["repositories"][self.APP_REPOSITORY])
+        tap = state["repositories"][self.TAP_REPOSITORY]
+        self.assertEqual(tap["branches"]["trunk"], "base-commit")
+        files = tap["commits"][tap["branches"][self.BRANCH]]
+        self.assertEqual(files[self.CASK_PATH]["content"], self.manifest.read_text())
+        self.assertEqual(files["README.md"], before["repositories"][self.TAP_REPOSITORY]
+                         ["commits"]["base-commit"]["README.md"])
+        self.assertEqual(len(tap["pull_requests"]), 1)
+        pr = tap["pull_requests"][0]
+        self.assertTrue(pr["draft"])
+        self.assertEqual((pr["base"], pr["head"]), ("trunk", self.BRANCH))
+        self.assertIn("https://github.com/Kristijan/pane-switcher-for-rex/releases/tag/v1.0.0",
+                      pr["body"])
+        self.assertNotIn("homebrew-pane-switcher-for-rex/releases", pr["body"])
+
+    def test_existing_cask_update_uses_the_existing_blob_precondition(self):
+        before = self.seed(existing=True)
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = self.remote()
+        tap = state["repositories"][self.TAP_REPOSITORY]
+        self.assertEqual(tap["commits"]["base-commit"],
+                         before["repositories"][self.TAP_REPOSITORY]["commits"]["base-commit"])
+        files = tap["commits"][tap["branches"][self.BRANCH]]
+        self.assertEqual(files[self.CASK_PATH]["content"], self.manifest.read_text())
+        self.assertEqual(len(tap["pull_requests"]), 1)
+        self.assertEqual(state["repositories"][self.APP_REPOSITORY],
+                         before["repositories"][self.APP_REPOSITORY])
+
+    def test_concurrent_cask_edit_is_not_overwritten_or_proposed(self):
+        self.seed(existing=True)
+        result = self.publish(CASK_FIXTURE_CONCURRENT_EDIT="1")
+        self.assertNotEqual(result.returncode, 0)
+        state = self.remote()
+        tap = state["repositories"][self.TAP_REPOSITORY]
+        files = tap["commits"][tap["branches"][self.BRANCH]]
+        self.assertEqual(files[self.CASK_PATH]["content"], "reviewer's concurrent cask edit\n")
+        self.assertEqual(tap["pull_requests"], [])
+        self.assertEqual(state["write_attempts"], 2)
+
+    def test_invalid_release_artifacts_never_attempt_remote_mutation(self):
+        original_archive = self.archive.read_bytes()
+        original_manifest = self.manifest.read_bytes()
+        original_checksum = self.checksum.read_bytes()
+        for corruption in ("archive", "manifest", "invalid-zip", "tag"):
+            with self.subTest(corruption=corruption):
+                before = self.seed(existing=True)
+                self.archive.write_bytes(original_archive)
+                self.manifest.write_bytes(original_manifest)
+                self.checksum.write_bytes(original_checksum)
+                tag = "v1.0.0"
+                if corruption == "archive":
+                    self.archive.write_bytes(original_archive + b"corruption")
+                elif corruption == "manifest":
+                    self.manifest.write_text("untrusted manifest\n")
+                elif corruption == "invalid-zip":
+                    self.archive.write_text("not a ZIP")
+                    self.checksum.write_text(hashlib.sha256(self.archive.read_bytes()).hexdigest()
+                                             + "  " + self.archive.name + "\n")
+                else:
+                    tag = "v1.0.1"
+                result = self.publish(tag)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.remote(), before)
+
+    def test_existing_branch_preserves_reviewed_work_without_creating_another_pr(self):
+        before = self.seed(existing=True, collision=True)
+        result = self.publish()
+        self.assertNotEqual(result.returncode, 0)
+        state = self.remote()
+        self.assertEqual(state["repositories"], before["repositories"])
+        self.assertEqual(state["write_attempts"], 1)
+
+    def test_github_errors_stop_without_falling_through_to_a_pull_request(self):
+        for stage, writes in (("repository", 0), ("base", 0), ("tree", 0),
+                              ("create-branch", 1), ("put-content", 2)):
+            with self.subTest(stage=stage):
+                before = self.seed(existing=True)
+                result = self.publish(CASK_FIXTURE_FAIL=stage)
+                self.assertNotEqual(result.returncode, 0)
+                state = self.remote()
+                tap = state["repositories"][self.TAP_REPOSITORY]
+                self.assertEqual(tap["pull_requests"], [])
+                self.assertEqual(tap["commits"],
+                                 before["repositories"][self.TAP_REPOSITORY]["commits"])
+                self.assertEqual(state["write_attempts"], writes)
+                if stage != "put-content":
+                    self.assertEqual(state["repositories"], before["repositories"])
+                else:
+                    self.assertEqual(tap["branches"][self.BRANCH], "base-commit")
+                self.assertEqual(state["repositories"][self.APP_REPOSITORY],
+                                 before["repositories"][self.APP_REPOSITORY])
 
 
 if __name__ == "__main__":

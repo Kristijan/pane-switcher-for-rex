@@ -100,12 +100,11 @@ jobs:
     needs: [package, draft]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment: production-release
     permissions:
       actions: read
-      contents: write
-      pull-requests: write
+      contents: read
     env:
-      GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ needs.package.outputs.tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -116,5 +115,7 @@ jobs:
         with:
           name: production-distribution
           path: distribution
-      - name: Create cask-only branch and draft pull request
+      - name: Create draft cask update PR in the Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: scripts/create-cask-pr.sh "$RELEASE_TAG" "$GITHUB_WORKSPACE/distribution"

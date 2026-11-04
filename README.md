@@ -33,15 +33,15 @@
 ### Homebrew
 
 ```sh
-brew tap Kristijan/pane-switcher-for-rex https://github.com/Kristijan/pane-switcher-for-rex
-brew install --cask Kristijan/pane-switcher-for-rex/pane-switcher-for-rex
+brew tap kristijan/pane-switcher-for-rex
+brew install --cask kristijan/pane-switcher-for-rex/pane-switcher-for-rex
 ```
 
 To upgrade, quit Pane Switcher for Rex, then run:
 
 ```sh
 brew update
-brew upgrade --cask Kristijan/pane-switcher-for-rex/pane-switcher-for-rex
+brew upgrade --cask kristijan/pane-switcher-for-rex/pane-switcher-for-rex
 ```
 
 ### Direct download
