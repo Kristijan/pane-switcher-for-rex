@@ -70,4 +70,6 @@ Warm-cache discovery refresh failures retain pending listing/session work and re
 
 Public releases use a separate, protected, tag-based workflow; CI's ad-hoc app is not a production download. See [RELEASING.md](RELEASING.md) for the one-time Apple/GitHub setup and the release → review → publish → Homebrew cask PR sequence.
 
+The application repository builds and hosts release artifacts; `Kristijan/homebrew-pane-switcher-for-rex` owns the committed cask and receives draft update PRs. Cask-publication tests run the real release script against an isolated, stateful GitHub service fixture, checking that reviewed branches and concurrent cask edits are never overwritten and invalid artifacts cause no remote mutations. They do not use GitHub credentials or make network requests.
+
 Update `Resources/Info.plist` for a new stable version. The `vMAJOR.MINOR.PATCH` release tag must exactly match `CFBundleShortVersionString`. No Intel or universal-binary release is supported. The app checks GitHub Releases when Settings opens but never installs updates. Update-check tests use isolated HTTP fixtures, not the live API.
