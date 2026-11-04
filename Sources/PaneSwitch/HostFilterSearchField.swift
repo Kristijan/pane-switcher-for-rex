@@ -366,8 +366,9 @@ private final class HostSuggestionRowView: NSTableRowView {
 private final class HostFilterSearchCell: NSSearchFieldCell {
     weak var hostEditor: HostFilterEditor?
 
+    // Accessibility focus resolution also looks up the editor. Configure it only
+    // during editing setup; changing its accessibility label here breaks that query.
     override func fieldEditor(for controlView: NSView) -> NSTextView? {
-        hostEditor?.hostField?.editorBeganEditing()
         return hostEditor
     }
 
@@ -377,6 +378,7 @@ private final class HostFilterSearchCell: NSSearchFieldCell {
             editor.isRichText = true
             editor.importsGraphics = false
         }
+        hostEditor?.hostField?.editorBeganEditing()
         return editor
     }
 }
