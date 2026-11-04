@@ -70,6 +70,8 @@ Open a PR against `main`. CI runs on every PR, including changes confined to rel
 
 PR checks use a read-only token and no Apple signing/notarization secrets. Do not use `pull_request_target` to run contributor code with privileged credentials. Changes to release scripts and workflows require especially careful review.
 
+Actions are pinned to full commit SHAs. The current checkout/upload/download actions use Node.js 24 on GitHub-hosted runners. Preserve named, ZIP-backed artifact handoff and fail-closed download digest verification when updating them. See the upstream [checkout](https://github.com/actions/checkout/releases/tag/v7.0.1), [upload-artifact](https://github.com/actions/upload-artifact/releases/tag/v7.0.2), and [download-artifact](https://github.com/actions/download-artifact/releases/tag/v8.0.2) release notes before changing their pins.
+
 Keep tests deterministic and independent of personal host names, running Rex sessions, credentials, and user preferences. Cover behavior and failure modes rather than incidental UI wording or implementation details. Do not commit `.build`, credentials, exported certificates, notarization keys, or local environment files.
 
 For concurrent transport tests, hold fixture requests behind explicit release signals rather than fixed sleeps. The queued-deadline test releases its active request only after the queued request expires, so CI scheduling delays cannot accidentally send that request.

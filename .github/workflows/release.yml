@@ -29,7 +29,7 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # A manual run must resolve an existing TAG, never a similarly named branch.
           ref: refs/tags/${{ env.RELEASE_TAG }}
@@ -60,7 +60,7 @@ jobs:
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
           NOTARY_PRIVATE_KEY: ${{ secrets.NOTARY_PRIVATE_KEY }}
         run: scripts/release.sh "$RELEASE_TAG"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: production-distribution
           path: |
@@ -83,7 +83,7 @@ jobs:
       GH_REPO: Kristijan/pane-switcher-for-rex
       RELEASE_TAG: ${{ needs.package.outputs.tag }}
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: production-distribution
           path: distribution
@@ -107,11 +107,11 @@ jobs:
     env:
       RELEASE_TAG: ${{ needs.package.outputs.tag }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ env.RELEASE_TAG }}
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: production-distribution
           path: distribution
