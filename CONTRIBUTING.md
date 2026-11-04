@@ -33,6 +33,10 @@ Remote host-discovery warnings describe the latest lookup, not historical failur
 
 The AppKit interaction tests dispatch real local mouse events through the picker, including its host-suggestion child window and nested children. For live UI checks, type `host:`, click a suggestion, and confirm that it inserts a host pill without dismissing the picker; clicks in an unrelated window must still dismiss it.
 
+For host-filter input changes, verify from an external accessibility client that the focused control resolves as `AXTextField` with subrole `AXSearchField`, retains its search label, and exposes the plain query even when host pills are present. Field-editor lookup must remain read-only: configure the editor, including its accessibility label, during editing setup rather than while AppKit resolves focus.
+
+With kindaVim running and Pane Switcher in its Off family, verify that one physical Escape dismisses the full picker, including with a host pill in the query. Synthetic Escape events can bypass the interception that caused the regression, so they are not sufficient for this compatibility check.
+
 When exercising picker cancellation, interrupt an in-flight opening lookup with Settings or Setup, then request the picker again before the old lookup finishes. The cancelled invocation must neither present a picker nor clear the replacement lookup's ownership; repeated shortcut presses must not start concurrent replacement lookups.
 
 With the global shortcut enabled, open the picker from another app, enter a query and select a pane, then press the shortcut again. The existing picker must regain focus without changing the query or selected pane, and Escape must return to the app from which that picker session originally opened. Opening Settings must continue to dismiss the picker rather than reuse its session.
